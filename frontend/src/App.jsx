@@ -1,36 +1,89 @@
 // App.jsx - the dashboard. Holds all shared state and talks to the backend;
 // the components in ./components only display data and report user actions.
 //
-// Layout:  header (survey dropdown + New survey)
-//          [ floor map + toolbar + legend ]  [ side panel: meter, measure, stats, readings ]
-import { useEffect, useRef, useState } from 'react'
+// Layout:  top bar  (survey dropdown, Survey around me, New survey,
+//                    mode: Measure / Walk / Place router, Live indicator)
+//          tabs     Survey | Networks
+//          Survey:  [ floor map + toolbar + legend ]
+//                   [ side panel: guide, live meter, measure, connection quality,
+//                     results, path-loss calibration, readings ]
+//          Networks: nearby networks table + channel charts
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from './api.js'
+import { describePosition, guideStatus } from './guide.js'
+import { useLiveStream } from './useLiveStream.js'
+import CalibrationPanel from './components/CalibrationPanel.jsx'
 import FloorMap from './components/FloorMap.jsx'
+import GuidePanel from './components/GuidePanel.jsx'
 import Legend from './components/Legend.jsx'
 import MeasurePanel from './components/MeasurePanel.jsx'
+import NetworksTab from './components/NetworksTab.jsx'
 import NewSurveyForm from './components/NewSurveyForm.jsx'
+import QualityCard from './components/QualityCard.jsx'
 import ReadingsList from './components/ReadingsList.jsx'
 import SignalMeter from './components/SignalMeter.jsx'
 import StatsPanel from './components/StatsPanel.jsx'
+import WhatIfCard from './components/WhatIfCard.jsx'
+
+const MODES = [
+  ['measure', 'Measure'],      // click = set position (+ auto-measure N s)
+  ['walk', 'Walk'],            // click = quick 3-sample reading, saved at once
+  ['router', 'Place router'],  // click = router position
+]
 
 export default function App() {
   const [health, setHealth] = useState(null)          // {db: "supabase" | "memory", ...}
   const [backendError, setBackendError] = useState('')
+  const [tab, setTab] = useState('survey')            // 'survey' | 'networks'
   const [surveys, setSurveys] = useState([])          // list for the dropdown
   const [surveyId, setSurveyId] = useState(null)      // selected survey
   const [survey, setSurvey] = useState(null)          // full survey (plan, router)
   const [readings, setReadings] = useState([])
   const [map, setMap] = useState(null)                // result of /map
+  const [calibration, setCalibration] = useState(null) // result of /calibration
   const [creating, setCreating] = useState(false)     // showing the New survey form?
-  const [mode, setMode] = useState('position')        // 'position' | 'router'
+  const [mode, setMode] = useState('measure')
   const [showHeatmap, setShowHeatmap] = useState(true)
   const [selected, setSelected] = useState(null)      // {x, y} in metres
-  const [measuring, setMeasuring] = useState(false)
+  const [busy, setBusy] = useState(null)              // null | 'measure' | 'walk'
   const [samples, setSamples] = useState(10)          // measurement time: 1 sample per second
-  const [autoMeasure, setAutoMeasure] = useState(true) // click on map = measure immediately
-  const [live, setLive] = useState(null)              // latest live RSSI from the meter
+  const [autoMeasure, setAutoMeasure] = useState(true) // Measure mode: click = measure at once
+  const [lastAddedId, setLastAddedId] = useState(null) // newest point pulses on the map
   const [notice, setNotice] = useState(null)          // {kind: 'ok' | 'error', text}
-  const startAroundMe = useRef(null)                  // survey id created by "Survey around me"
+  const [skipped, setSkipped] = useState([])          // guided target numbers the user skipped
+  const [whatIfMode, setWhatIfMode] = useState(false)
+  const [whatIf, setWhatIf] = useState(null)          // {router, result} or {router, error}
+  const surveyIdRef = useRef(null)
+  surveyIdRef.current = surveyId
+  const refreshTimer = useRef(null)
+  const whatIfBusy = useRef(false)                    // one prediction request at a time
+  const whatIfNext = useRef(null)                     // latest drag position while busy
+
+  // Live data: one sample per second + "a reading was saved" events.
+  const stream = useLiveStream((type, data) => {
+    if (type === 'reading') {
+      const mine = data.survey_id === surveyIdRef.current
+      if (data.action === 'added' && mine) setLastAddedId(data.reading.id)
+      if (mine || data.action === 'deleted') scheduleRefresh()
+    } else if (type === 'survey') {
+      if (data.deleted) refreshSurveys()
+      else if (data.survey_id === surveyIdRef.current) {
+        api.get(`/surveys/${data.survey_id}`).then(setSurvey).catch(() => {})
+        scheduleRefresh()
+      }
+    }
+  })
+
+  // Guided 10-point survey: which targets are done, and where to go next.
+  const guide = useMemo(
+    () => (survey ? guideStatus(survey.width, survey.height, readings, skipped) : null),
+    [survey, readings, skipped]
+  )
+  // Readings the calibration flags as "obstructed" get a warning ring on the map.
+  const obstructedIds = useMemo(
+    () => new Set((calibration?.points || []).filter((p) => p.obstructed).map((p) => p.id)),
+    [calibration]
+  )
 
   const showError = (err) => setNotice({ kind: 'error', text: err.message })
   const showOk = (text) => setNotice({ kind: 'ok', text })
@@ -48,27 +101,19 @@ export default function App() {
     return () => clearTimeout(timer)
   }, [notice])
 
-  // Whenever the selected survey changes, load its details, readings and map.
+  // Whenever the selected survey changes, load its details, readings, map, calibration.
   useEffect(() => {
-    setSurvey(null); setReadings([]); setMap(null); setSelected(null)
+    setSurvey(null); setReadings([]); setMap(null); setCalibration(null)
+    setSelected(null); setSkipped([]); setWhatIfMode(false); setWhatIf(null)
     if (!surveyId) return
     let active = true
     Promise.all([
       api.get(`/surveys/${surveyId}`),
       api.get(`/surveys/${surveyId}/readings`),
       api.get(`/surveys/${surveyId}/map`),
+      api.get(`/surveys/${surveyId}/calibration`),
     ])
-      .then(([s, r, m]) => {
-        if (!active) return
-        setSurvey(s); setReadings(r); setMap(m)
-        // "Survey around me": I am standing at the centre of the new area.
-        if (startAroundMe.current === s.id) {
-          startAroundMe.current = null
-          const centre = { x: s.width / 2, y: s.height / 2 }
-          setSelected(centre)
-          if (autoMeasure) measureAt(centre, s.id)
-        }
-      })
+      .then(([s, r, m, c]) => { if (active) { setSurvey(s); setReadings(r); setMap(m); setCalibration(c) } })
       .catch((err) => active && showError(err))
     return () => { active = false }
   }, [surveyId])
@@ -87,14 +132,27 @@ export default function App() {
     }
   }
 
-  // Reload readings + heatmap after any change to the readings.
-  async function refreshReadings(id = surveyId) {
-    const [r, m] = await Promise.all([
-      api.get(`/surveys/${id}/readings`),
-      api.get(`/surveys/${id}/map`),
-    ])
-    setReadings(r)
-    setMap(m)
+  // Reload readings, heatmap and calibration after any change to the readings.
+  async function refreshReadings(id = surveyIdRef.current) {
+    if (!id) return
+    try {
+      const [r, m, c] = await Promise.all([
+        api.get(`/surveys/${id}/readings`),
+        api.get(`/surveys/${id}/map`),
+        api.get(`/surveys/${id}/calibration`),
+      ])
+      if (id !== surveyIdRef.current) return        // user switched survey meanwhile
+      setReadings(r); setMap(m); setCalibration(c)
+    } catch (err) {
+      showError(err)
+    }
+  }
+
+  // Several events can arrive together (e.g. our own save + the stream's event):
+  // wait 250 ms and refresh once.
+  function scheduleRefresh() {
+    clearTimeout(refreshTimer.current)
+    refreshTimer.current = setTimeout(() => refreshReadings(), 250)
   }
 
   // ------------------------------------------------------------ actions
@@ -102,63 +160,103 @@ export default function App() {
     const created = await api.post('/surveys', data)   // errors are shown by the form
     setCreating(false)
     await refreshSurveys(created.id)
-    showOk(`Survey “${created.name}” created. Click the map where you are standing.`)
+    showOk(`Survey “${created.name}” created. Walk to point 1 and press “I'm here – measure”.`)
   }
 
-  // "Survey around me": a 12 x 8 m area with me at the centre, measured right away.
-  // (Browser GPS/geolocation is only accurate to tens of metres indoors, so the
-  // position inside the room always comes from clicking the map.)
+  // "Survey around me": a 12 x 8 m area around where I stand, surveyed with the
+  // guided 10 points. (Browser GPS/geolocation is only accurate to tens of
+  // metres indoors, so positions inside the house come from the map.)
   async function handleSurveyAroundMe() {
     try {
       const name = `Around me ${new Date().toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}`
       const created = await api.post('/surveys', { name, width: 12, height: 8 })
-      startAroundMe.current = created.id
       setCreating(false)
-      setMode('position')
+      setMode('measure')
+      setTab('survey')
       await refreshSurveys(created.id)
-      showOk('You are at the centre (6, 4) m. Walk, click your new spot on the map, and it measures automatically.')
+      showOk('12 × 8 m area created. Walk to point 1 and press “I\'m here – measure”.')
     } catch (err) {
       showError(err)
     }
   }
 
-  // A click on the map: either mark my position (and auto-measure) or place the router.
+  // A click on the map - what happens depends on the mode.
   async function handlePick(point) {
-    if (mode === 'position') {
-      if (measuring) {
-        showError(new Error('A measurement is still running - wait for it to finish, then click your next spot.'))
-        return
+    if (mode === 'router') {
+      try {
+        setSurvey(await api.patch(`/surveys/${surveyId}`, { router: point }))
+        showOk(`Router placed at ${describePosition(point)}.`)
+        scheduleRefresh()                            // calibration depends on the router
+      } catch (err) {
+        showError(err)
       }
-      setSelected(point)
-      if (autoMeasure) measureAt(point)
       return
     }
-    try {
-      setSurvey(await api.patch(`/surveys/${surveyId}`, { router: point }))
-      showOk(`Router placed at (${point.x}, ${point.y}) m.`)
-    } catch (err) {
-      showError(err)
+    if (busy) {
+      showError(new Error(busy === 'walk'
+        ? 'Still recording the previous spot (about 3 s) - click again in a moment.'
+        : 'A measurement is still running - wait for it to finish, then click your next spot.'))
+      return
     }
+    setSelected(point)
+    if (mode === 'walk') walkAt(point)
+    else if (autoMeasure) measureAt(point)
   }
 
-  // Real measurement: the backend takes `samples` readings, 1 s apart, at `point`.
-  async function measureAt(point, id = surveyId) {
-    setMeasuring(true)
+  // Shared by Measure and Walk: run the request, show the result, refresh.
+  async function record(kind, request) {
+    setBusy(kind)
     setNotice(null)
     try {
-      const r = await api.post(`/surveys/${id}/measure`, { ...point, samples })
-      showOk(`Saved ${r.rssi_mean} dBm ± ${r.rssi_std} at (${r.x}, ${r.y}) from ${r.samples.length} samples.`)
-      await refreshReadings(id)
+      const r = await request()
+      setLastAddedId(r.id)
+      showOk(`Saved ${r.rssi_mean} dBm ± ${r.rssi_std} at ${describePosition(r)} (${r.samples.length} samples).`)
+      await refreshReadings()
     } catch (err) {
       showError(err)
     } finally {
-      setMeasuring(false)
+      setBusy(null)
+    }
+  }
+
+  // Measure: the backend averages `samples` fresh samples (1 per second).
+  const measureAt = (point) => record('measure', () => api.post(`/surveys/${surveyId}/measure`, { ...point, samples }))
+  // Walk: quick 3-sample reading, saved immediately.
+  const walkAt = (point) => record('walk', () => api.post(`/surveys/${surveyId}/walk`, point))
+
+  // What-if: while dragging, ask the backend for a prediction. If a request is
+  // already running, remember only the newest position and send it afterwards.
+  async function handleWhatIf(point) {
+    if (whatIfBusy.current) { whatIfNext.current = point; return }
+    whatIfBusy.current = true
+    try {
+      const result = await api.get(`/surveys/${surveyId}/whatif?x=${point.x}&y=${point.y}`)
+      setWhatIf({ router: point, result })
+    } catch (err) {
+      setWhatIf({ router: point, error: err.message })
+    } finally {
+      whatIfBusy.current = false
+      const next = whatIfNext.current
+      whatIfNext.current = null
+      if (next) handleWhatIf(next)
+    }
+  }
+
+  async function applyWhatIf() {
+    try {
+      setSurvey(await api.patch(`/surveys/${surveyId}`, { router: whatIf.router }))
+      showOk(`Router set to ${describePosition(whatIf.router)}. Re-survey to confirm the prediction.`)
+      setWhatIfMode(false); setWhatIf(null)
+      scheduleRefresh()
+    } catch (err) {
+      showError(err)
     }
   }
 
   async function handleManual(rssi) {
     try {
-      await api.post(`/surveys/${surveyId}/readings`, { ...selected, rssi })
+      const r = await api.post(`/surveys/${surveyId}/readings`, { ...selected, rssi })
+      setLastAddedId(r.id)
       showOk(`Added manual reading ${rssi} dBm.`)
       await refreshReadings()
       return true
@@ -189,21 +287,44 @@ export default function App() {
   }
 
   // ------------------------------------------------------------ render
+  const statusLabel = { live: 'Live', connecting: 'Connecting…', disconnected: 'Disconnected' }[stream.status]
+  const hint = {
+    measure: autoMeasure
+      ? `Follow the numbered targets, or click any spot - it measures for ${samples} s automatically. Arrow keys + Enter also work.`
+      : 'Click where you are standing, then press “Measure here”. Arrow keys move the marker.',
+    walk: 'Walk mode: click your spot each time you stop - a quick 3-sample reading (~3 s) is saved and the map redraws.',
+    router: 'Click where the router is (Enter places it at the keyboard marker).',
+  }[mode]
+
   return (
     <div className="app">
       <header className="header">
         <h1>Wi-Fi Signal Mapper</h1>
         <div className="header-controls">
           <label htmlFor="survey-select" className="sr-only">Survey</label>
-          <select id="survey-select" value={surveyId ?? ''} disabled={!surveys.length || measuring}
+          <select id="survey-select" value={surveyId ?? ''} disabled={!surveys.length || !!busy}
             onChange={(e) => { setCreating(false); setSurveyId(e.target.value) }}>
             {!surveys.length && <option value="">No surveys yet</option>}
             {surveys.map((s) => <option key={s.id} value={s.id}>{s.name} ({s.width}×{s.height} m)</option>)}
           </select>
-          <button className="primary" onClick={handleSurveyAroundMe} disabled={measuring}>Survey around me</button>
-          <button onClick={() => setCreating(true)} disabled={measuring}>New survey</button>
+          <button className="primary" onClick={handleSurveyAroundMe} disabled={!!busy}>Survey around me</button>
+          <button onClick={() => setCreating(true)} disabled={!!busy}>New survey</button>
+          <div className="segmented" role="group" aria-label="Map click mode">
+            {MODES.map(([key, label]) => (
+              <button key={key} aria-pressed={mode === key} onClick={() => setMode(key)}>{label}</button>
+            ))}
+          </div>
+          <span className={`live-status ${stream.status}`} role="status" aria-live="polite">
+            <span className="dot" aria-hidden="true" />{statusLabel}
+          </span>
         </div>
       </header>
+
+      <nav className="tabs" role="tablist" aria-label="Views">
+        {[['survey', 'Survey'], ['networks', 'Networks']].map(([key, label]) => (
+          <button key={key} role="tab" aria-selected={tab === key} onClick={() => setTab(key)}>{label}</button>
+        ))}
+      </nav>
 
       {backendError && <div className="banner error" role="alert">{backendError}</div>}
       {health?.db === 'memory' && (
@@ -221,7 +342,9 @@ export default function App() {
         </div>
       )}
 
-      {creating ? (
+      {tab === 'networks' ? (
+        <main className="single wide"><NetworksTab live={stream.latest} /></main>
+      ) : creating ? (
         <main className="single">
           <NewSurveyForm onCreate={handleCreate} onCancel={() => setCreating(false)} canCancel={surveys.length > 0} />
         </main>
@@ -229,36 +352,47 @@ export default function App() {
         <main className="layout">
           <section className="map-panel" aria-label="Floor map">
             <div className="toolbar">
-              <div className="segmented" role="group" aria-label="Click mode">
-                <button aria-pressed={mode === 'position'} onClick={() => setMode('position')}>Mark my position</button>
-                <button aria-pressed={mode === 'router'} onClick={() => setMode('router')}>Place router</button>
-              </div>
               <label className="check">
                 <input type="checkbox" checked={showHeatmap} onChange={(e) => setShowHeatmap(e.target.checked)} />
                 Heatmap
               </label>
+              {calibration?.ready && (
+                <label className="check">
+                  <input type="checkbox" checked={whatIfMode}
+                    onChange={(e) => { setWhatIfMode(e.target.checked); if (!e.target.checked) setWhatIf(null) }} />
+                  What-if (drag router)
+                </label>
+              )}
               <span className="muted small">{survey.width} × {survey.height} m</span>
+              {busy &&<span className="busy-tag" role="status">{busy === 'walk' ? 'Recording spot…' : 'Measuring…'}</span>}
             </div>
             <FloorMap survey={survey} readings={readings} map={map} showHeatmap={showHeatmap}
-              mode={mode} selected={selected} live={live?.rssi ?? null} onSelect={setSelected} onPick={handlePick} />
+              mode={mode} selected={selected} live={stream.latest?.rssi ?? null} guide={guide}
+              obstructedIds={obstructedIds} lastAddedId={lastAddedId}
+              whatIfMode={whatIfMode} whatIf={whatIf} onWhatIf={handleWhatIf}
+              onSelect={setSelected} onPick={handlePick} />
             <p className="muted small">
-              {mode === 'position'
-                ? autoMeasure
-                  ? `Walk to a spot and click it on the map - it measures for ${samples} s automatically. Arrow keys + Enter also work.`
-                  : 'Click where you are standing, then press “Measure here”. Arrow keys move the marker.'
-                : 'Click where the router is (Enter places it at the keyboard marker).'}
+              {hint} Top-left corner = 0 m; pick which real wall is “left” and “top” before you start.
             </p>
             <Legend />
           </section>
 
           <aside className="side-panel">
-            <SignalMeter paused={measuring} onReading={setLive} />
-            <MeasurePanel selected={selected} measuring={measuring}
+            <GuidePanel guide={guide} measuring={!!busy} samples={samples}
+              onMeasurePoint={(p) => { const point = { x: p.x, y: p.y }; setSelected(point); measureAt(point) }}
+              onSkip={(n) => setSkipped((list) => [...list, n])}
+              onResetSkips={() => setSkipped([])} />
+            <SignalMeter samples={stream.samples} latest={stream.latest} status={stream.status} />
+            <MeasurePanel mode={mode} selected={selected} measuring={!!busy}
               samples={samples} onSamplesChange={setSamples}
               autoMeasure={autoMeasure} onAutoChange={setAutoMeasure}
               onMeasure={() => measureAt(selected)} onManual={handleManual} />
-            <StatsPanel map={map} />
-            <ReadingsList surveyId={surveyId} readings={readings}
+            <QualityCard latest={stream.latest} />
+            <StatsPanel map={map} guideComplete={guide.complete} />
+            <CalibrationPanel calibration={calibration} />
+            <WhatIfCard calibration={calibration} whatIfMode={whatIfMode} whatIf={whatIf} current={map}
+              onToggle={(on) => { setWhatIfMode(on); if (!on) setWhatIf(null) }} onApply={applyWhatIf} />
+            <ReadingsList surveyId={surveyId} readings={readings} obstructedIds={obstructedIds}
               onDeleteReading={handleDeleteReading} onDeleteSurvey={handleDeleteSurvey} />
           </aside>
         </main>

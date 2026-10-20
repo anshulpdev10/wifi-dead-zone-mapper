@@ -11,11 +11,14 @@ Both classes have exactly the same methods (same "interface").
 """
 
 import os
+import time
 import uuid
 from datetime import datetime, timezone
 
 # Columns returned for the survey dropdown (the plan image is left out - it is big).
 SURVEY_SUMMARY = ("id", "name", "width", "height", "created")
+# Reading columns added for the live version (see the "upgrade" part of schema.sql).
+NEW_READING_COLUMNS = ("channel", "band", "mode")
 
 
 def _now():
@@ -86,49 +89,73 @@ class SupabaseStore:
         self.client = create_client(url, key)
         # Test query: fails fast if the URL/key is wrong or schema.sql was not run.
         self.client.table("surveys").select("id").limit(1).execute()
+        # Newer columns (channel, band, mode). If schema.sql has not been re-run
+        # yet, keep working and simply leave them out when saving.
+        try:
+            self.client.table("readings").select(",".join(NEW_READING_COLUMNS)).limit(1).execute()
+            self.missing_columns = False
+        except Exception:
+            self.missing_columns = True
 
     def _table(self, name):
         return self.client.table(name)
 
+    def _run(self, query, retry=True):
+        """Execute a query and return its rows. If the network connection to
+        Supabase drops (Wi-Fi blip, idle connection closed), try once more.
+        Inserts pass retry=False so a reading can never be saved twice."""
+        import httpx                      # installed together with supabase
+        try:
+            return query.execute().data
+        except httpx.TransportError:
+            if not retry:
+                raise
+            time.sleep(0.3)
+            return query.execute().data
+
     # -- surveys
     def list_surveys(self):
-        return self._table("surveys").select(",".join(SURVEY_SUMMARY)) \
-            .order("created", desc=True).execute().data
+        return self._run(self._table("surveys").select(",".join(SURVEY_SUMMARY))
+                         .order("created", desc=True))
 
     def get_survey(self, survey_id):
         if not _is_uuid(survey_id):          # Postgres would reject a bad uuid
             return None
-        rows = self._table("surveys").select("*").eq("id", survey_id).execute().data
+        rows = self._run(self._table("surveys").select("*").eq("id", survey_id))
         return rows[0] if rows else None
 
     def create_survey(self, data):
-        return self._table("surveys").insert(data).execute().data[0]
+        return self._run(self._table("surveys").insert(data), retry=False)[0]
 
     def update_survey(self, survey_id, fields):
         if not _is_uuid(survey_id):
             return None
-        rows = self._table("surveys").update(fields).eq("id", survey_id).execute().data
+        rows = self._run(self._table("surveys").update(fields).eq("id", survey_id))
         return rows[0] if rows else None
 
     def delete_survey(self, survey_id):
         if not _is_uuid(survey_id):
             return False
-        return bool(self._table("surveys").delete().eq("id", survey_id).execute().data)
+        return bool(self._run(self._table("surveys").delete().eq("id", survey_id)))
 
     # -- readings
     def list_readings(self, survey_id):
         if not _is_uuid(survey_id):
             return []
-        return self._table("readings").select("*").eq("survey_id", survey_id) \
-            .order("time").execute().data
+        return self._run(self._table("readings").select("*").eq("survey_id", survey_id)
+                         .order("time"))
 
     def add_reading(self, data):
-        return self._table("readings").insert(data).execute().data[0]
+        if self.missing_columns:
+            # Old table: keep at least the mode (measure / walk / manual) in "method".
+            data = {**{k: v for k, v in data.items() if k not in NEW_READING_COLUMNS},
+                    "method": data.get("mode") or data.get("method")}
+        return self._run(self._table("readings").insert(data), retry=False)[0]
 
     def delete_reading(self, reading_id):
         if not _is_uuid(reading_id):
             return False
-        return bool(self._table("readings").delete().eq("id", reading_id).execute().data)
+        return bool(self._run(self._table("readings").delete().eq("id", reading_id)))
 
 
 def connect():
@@ -138,6 +165,10 @@ def connect():
     if not url or not key:
         return MemoryStore(), "SUPABASE_URL / SUPABASE_KEY not set in backend/.env - using in-memory storage."
     try:
-        return SupabaseStore(url, key), f"Connected to Supabase ({url})."
+        store = SupabaseStore(url, key)
+        if store.missing_columns:
+            return store, (f"Connected to Supabase ({url}), but the readings table has no "
+                           "channel/band/mode columns yet - re-run schema.sql to store them.")
+        return store, f"Connected to Supabase ({url})."
     except Exception as exc:   # bad key, no internet, tables missing...
         return MemoryStore(), f"Supabase unreachable ({exc}) - using in-memory storage."

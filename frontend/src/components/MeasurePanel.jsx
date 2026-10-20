@@ -8,7 +8,7 @@ import { useEffect, useState } from 'react'
 
 const SAMPLE_OPTIONS = [3, 5, 10, 15, 20, 30]   // 1 sample per second
 
-export default function MeasurePanel({ selected, measuring, samples, onSamplesChange,
+export default function MeasurePanel({ mode, selected, measuring, samples, onSamplesChange,
   autoMeasure, onAutoChange, onMeasure, onManual }) {
   const [manualRssi, setManualRssi] = useState('')
   const [elapsed, setElapsed] = useState(0)
@@ -33,6 +33,14 @@ export default function MeasurePanel({ selected, measuring, samples, onSamplesCh
       <h2 id="measure-title">Measure</h2>
       <p className="small">Position: <strong>{position}</strong></p>
 
+      {mode === 'walk' && (
+        <p className="small walk-note">
+          Walk mode is on: every click on the map saves a quick 3-sample reading (~3 s).
+          Switch to <strong>Measure</strong> for longer, more accurate readings.
+        </p>
+      )}
+
+      {mode !== 'walk' && <>
       <div className="row">
         <label htmlFor="samples">Time</label>
         <select id="samples" value={samples} disabled={measuring}
@@ -48,8 +56,9 @@ export default function MeasurePanel({ selected, measuring, samples, onSamplesCh
         <input type="checkbox" checked={autoMeasure} onChange={(e) => onAutoChange(e.target.checked)} />
         Auto-measure when I click the map
       </label>
+      </>}
 
-      {measuring && (
+      {measuring && mode !== 'walk' && (
         <div className="progress" role="status">
           <div style={{ width: `${Math.min(100, (elapsed / samples) * 100)}%` }} />
           <span className="small">Hold still… {Math.min(elapsed, samples)} / {samples} s</span>

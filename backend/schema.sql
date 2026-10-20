@@ -30,6 +30,12 @@ create table if not exists readings (
 
 create index if not exists readings_survey_idx on readings(survey_id);
 
+-- Upgrade for the live version (safe to run again - "if not exists"):
+-- Wi-Fi channel and band of the connected network, and how the reading was taken.
+alter table readings add column if not exists channel integer;
+alter table readings add column if not exists band    text;     -- "2.4 GHz" / "5 GHz"
+alter table readings add column if not exists mode    text;     -- "measure" | "walk" | "manual"
+
 -- Row Level Security is on, with no public policies: only the backend, using
 -- the secret / service_role key from backend/.env, can read and write.
 alter table surveys  enable row level security;

@@ -1,39 +1,52 @@
 """
 app.py - Flask REST API for the Wi-Fi Dead-Zone & Signal Mapping System.
 
-Runs on http://127.0.0.1:5000 ON THE SAME LAPTOP that is walked around,
-because /measure reads this laptop's own Wi-Fi adapter (wifi_reader.py).
+Runs ON THE SAME LAPTOP that is walked around: the background sampler
+(sampler.py) reads this laptop's own Wi-Fi adapter every second.
 
 Endpoints
   GET    /api/health                      server + database status
-  GET    /api/rssi                        one live reading (for the signal meter)
+  GET    /api/stream                      live Server-Sent Events: "sample" every 1 s,
+                                          "reading" whenever a reading is saved/deleted
+  GET    /api/history                     last 120 samples (fills the graph on page load)
+  GET    /api/rssi                        latest single sample
+  GET    /api/networks                    nearby networks + recommended 2.4 GHz channel
   GET    /api/surveys                     list surveys
   POST   /api/surveys                     create {name, width, height, plan?}
   GET    /api/surveys/<id>                one survey (with plan image + router)
   PATCH  /api/surveys/<id>                change name / size / plan / router
   DELETE /api/surveys/<id>                delete survey and its readings
   GET    /api/surveys/<id>/readings       list readings
-  POST   /api/surveys/<id>/measure        {x, y, samples} -> measure here
-  POST   /api/surveys/<id>/readings       {x, y, rssi}    -> manual entry
+  POST   /api/surveys/<id>/measure        {x, y, samples} -> average N fresh samples (mode "measure")
+  POST   /api/surveys/<id>/walk           {x, y}          -> quick 3-sample reading (mode "walk")
+  POST   /api/surveys/<id>/readings       {x, y, rssi}    -> manual entry (mode "manual")
   DELETE /api/readings/<id>               delete one reading
-  GET    /api/surveys/<id>/map            heatmap grid, dead zones, suggestion, stats
+  GET    /api/surveys/<id>/map            heatmap grid, dead zones, extender, stats
+  GET    /api/surveys/<id>/calibration    path-loss model fitted to this survey
+  GET    /api/surveys/<id>/whatif?x=&y=   predicted heatmap if the router moved to (x, y)
   GET    /api/surveys/<id>/export.csv     readings as a CSV file
+
+Start:  python app.py          (dashboard on this laptop only)
+        python app.py --lan    (also reachable from a phone on the same Wi-Fi)
 """
 
 import csv
 import io
+import json
 import platform
+import queue
 import statistics
-import time
+import sys
 
 from dotenv import load_dotenv
 from flask import Flask, Response, jsonify, request
 from flask_cors import CORS
 from werkzeug.exceptions import HTTPException
 
+import channels
 import db
 import mapping
-from wifi_reader import read_rssi
+from sampler import sampler
 
 load_dotenv()                      # reads backend/.env (SUPABASE_URL, SUPABASE_KEY)
 
@@ -46,6 +59,7 @@ print(f"[db] mode={store.mode}: {db_message}")
 
 RSSI_MIN, RSSI_MAX = -110, -10     # anything outside this is not a real Wi-Fi reading
 SAMPLES_DEFAULT, SAMPLES_MIN, SAMPLES_MAX = 10, 3, 30
+WALK_SAMPLES = 3
 
 
 # ------------------------------------------------------------------ helpers
@@ -149,16 +163,61 @@ def validate_survey_fields(data, partial=False):
     return fields
 
 
-# ------------------------------------------------------------------ status
+# ------------------------------------------------------------------ status + live data
 @app.get("/api/health")
 def health():
     return jsonify({"ok": True, "db": store.mode, "db_message": db_message,
-                    "platform": platform.system()})
+                    "platform": platform.system(), "gateway": sampler.gateway})
+
+
+def sse(event, data):
+    """Format one Server-Sent Event: 'event: name' + 'data: <json>' + blank line."""
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+@app.get("/api/stream")
+def stream():
+    """Live stream. The browser's EventSource keeps this response open and
+    receives every event the sampler publishes (and reconnects by itself)."""
+    q = sampler.subscribe()
+
+    def events():
+        try:
+            yield "retry: 2000\n\n"                     # reconnect after 2 s if dropped
+            latest = sampler.latest()
+            if latest:
+                yield sse("sample", latest)
+            while True:
+                try:
+                    event, data = q.get(timeout=15)
+                    yield sse(event, data)
+                except queue.Empty:
+                    yield ": keep-alive\n\n"             # comment line keeps proxies happy
+        finally:                                          # browser tab closed
+            sampler.unsubscribe(q)
+
+    return Response(events(), mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.get("/api/history")
+def history():
+    return jsonify({"samples": sampler.history(), "quality": sampler.quality()})
 
 
 @app.get("/api/rssi")
 def live_rssi():
-    return jsonify(read_rssi())
+    latest = sampler.latest()
+    if latest is None:
+        raise ApiError("No sample yet - the sampler is starting.", 503)
+    return jsonify(latest)
+
+
+@app.get("/api/networks")
+def networks():
+    nets = sampler.networks
+    return jsonify({"networks": nets, "time": sampler.networks_time, "error": sampler.networks_error,
+                    **channels.recommend_24ghz(nets)})
 
 
 # ------------------------------------------------------------------ surveys
@@ -197,13 +256,16 @@ def update_survey(survey_id):
             raise ApiError("'router' must be {\"x\": .., \"y\": ..} or null.")
     if not fields:
         raise ApiError("Nothing to update. Send name, width, height, plan or router.")
-    return jsonify(store.update_survey(survey_id, fields))
+    updated = store.update_survey(survey_id, fields)
+    sampler.publish("survey", {"survey_id": survey_id})   # other dashboards reload it
+    return jsonify(updated)
 
 
 @app.delete("/api/surveys/<survey_id>")
 def delete_survey(survey_id):
     if not store.delete_survey(survey_id):
         raise ApiError("Survey not found.", 404)
+    sampler.publish("survey", {"survey_id": survey_id, "deleted": True})
     return jsonify({"deleted": survey_id})
 
 
@@ -225,34 +287,53 @@ def summarise(samples):
     }
 
 
+def collect(n):
+    """Wait for n fresh samples from the background sampler (1 per second).
+    Returns (rssi values, last good sample)."""
+    try:
+        fresh = sampler.wait_for_samples(n)
+    except TimeoutError as exc:
+        raise ApiError(str(exc), 503)
+    good = [s for s in fresh if s["rssi"] is not None]
+    if not good:
+        raise ApiError(fresh[-1]["error"] or "No Wi-Fi reading available.", 503)
+    if len(good) < min(n, SAMPLES_MIN):
+        raise ApiError(f"Only {len(good)} of {n} samples succeeded: {fresh[-1]['error']}", 503)
+    return [s["rssi"] for s in good], good[-1]
+
+
+def save_reading(survey_id, x, y, values, mode, info=None):
+    """Store a reading and tell every open dashboard about it."""
+    info = info or {}
+    reading = store.add_reading({
+        "survey_id": survey_id, "x": x, "y": y, **summarise(values),
+        "ssid": info.get("ssid"), "channel": info.get("channel"), "band": info.get("band"),
+        "method": info.get("method") or mode, "mode": mode,
+    })
+    sampler.publish("reading", {"survey_id": survey_id, "action": "added", "reading": reading})
+    return reading
+
+
 @app.post("/api/surveys/<survey_id>/measure")
 def measure(survey_id):
-    """Take N samples, 1 second apart, at the user's current position.
+    """Average N fresh samples (1 s apart) at the user's position.
     Averaging smooths out the natural second-to-second fluctuation (fading)."""
     survey = find_survey(survey_id)
     data = body()
     x, y = point_in_floor(data, survey)
     n = int(number(data, "samples", required=False) or SAMPLES_DEFAULT)
     n = max(SAMPLES_MIN, min(SAMPLES_MAX, n))      # clamp to 3..30
+    values, last = collect(n)
+    return jsonify(save_reading(survey_id, x, y, values, "measure", last)), 201
 
-    samples, last = [], None
-    for i in range(n):
-        if i:
-            time.sleep(1)
-        last = read_rssi()
-        if last["rssi"] is not None:
-            samples.append(last["rssi"])
-        elif i == 0:
-            # First read failed (Wi-Fi off, Location blocked...) - stop immediately.
-            raise ApiError(last["error"], 503)
 
-    if len(samples) < SAMPLES_MIN:
-        raise ApiError(f"Only {len(samples)} of {n} samples succeeded: {last['error']}", 503)
-
-    reading = store.add_reading({"survey_id": survey_id, "x": x, "y": y,
-                                 **summarise(samples),
-                                 "ssid": last["ssid"], "method": last["method"]})
-    return jsonify(reading), 201
+@app.post("/api/surveys/<survey_id>/walk")
+def walk(survey_id):
+    """Walk mode: a quick 3-sample reading, saved immediately."""
+    survey = find_survey(survey_id)
+    x, y = point_in_floor(body(), survey)
+    values, last = collect(WALK_SAMPLES)
+    return jsonify(save_reading(survey_id, x, y, values, "walk", last)), 201
 
 
 @app.post("/api/surveys/<survey_id>/readings")
@@ -262,16 +343,15 @@ def manual_reading(survey_id):
     data = body()
     x, y = point_in_floor(data, survey)
     rssi = round(number(data, "rssi", RSSI_MIN, RSSI_MAX), 1)
-    reading = store.add_reading({"survey_id": survey_id, "x": x, "y": y,
-                                 **summarise([rssi]),
-                                 "ssid": data.get("ssid") or None, "method": "manual"})
-    return jsonify(reading), 201
+    info = {"ssid": data.get("ssid") or None, "method": "manual"}
+    return jsonify(save_reading(survey_id, x, y, [rssi], "manual", info)), 201
 
 
 @app.delete("/api/readings/<reading_id>")
 def delete_reading(reading_id):
     if not store.delete_reading(reading_id):
         raise ApiError("Reading not found.", 404)
+    sampler.publish("reading", {"action": "deleted", "id": reading_id})
     return jsonify({"deleted": reading_id})
 
 
@@ -280,8 +360,25 @@ def delete_reading(reading_id):
 def coverage_map(survey_id):
     survey = find_survey(survey_id)
     cell = number(request.args, "cell", 0.1, 2, required=False) or 0.25
-    result = mapping.compute_map(survey["width"], survey["height"],
-                                 store.list_readings(survey_id), cell)
+    return jsonify(mapping.compute_map(survey["width"], survey["height"],
+                                       store.list_readings(survey_id), cell))
+
+
+@app.get("/api/surveys/<survey_id>/calibration")
+def calibration(survey_id):
+    survey = find_survey(survey_id)
+    return jsonify(mapping.calibrate(store.list_readings(survey_id), survey.get("router")))
+
+
+@app.get("/api/surveys/<survey_id>/whatif")
+def what_if(survey_id):
+    """Predict the heatmap if the router stood at (x, y) instead."""
+    survey = find_survey(survey_id)
+    x, y = point_in_floor(request.args, survey)
+    result = mapping.predict_map(survey["width"], survey["height"], store.list_readings(survey_id),
+                                 survey.get("router"), {"x": x, "y": y})
+    if not result.get("ready"):
+        raise ApiError(result["message"], 409)
     return jsonify(result)
 
 
@@ -291,17 +388,23 @@ def export_csv(survey_id):
     out = io.StringIO()
     writer = csv.writer(out)
     writer.writerow(["x_m", "y_m", "rssi_mean_dbm", "rssi_std_db", "min_dbm", "max_dbm",
-                     "n_samples", "band", "ssid", "method", "time"])
+                     "n_samples", "band_quality", "ssid", "channel", "wifi_band", "mode", "time"])
     for r in store.list_readings(survey_id):
         writer.writerow([r["x"], r["y"], r["rssi_mean"], r["rssi_std"], r["min"], r["max"],
-                         len(r["samples"]), mapping.band_name(r["rssi_mean"]),
-                         r.get("ssid") or "", r.get("method") or "", r["time"]])
+                         len(r["samples"]), mapping.band_name(r["rssi_mean"]), r.get("ssid") or "",
+                         r.get("channel") or "", r.get("band") or "",
+                         r.get("mode") or r.get("method") or "", r["time"]])
     safe_name = "".join(ch if ch.isalnum() else "_" for ch in survey["name"]) or "survey"
     return Response(out.getvalue(), mimetype="text/csv",
                     headers={"Content-Disposition": f'attachment; filename="{safe_name}.csv"'})
 
 
 if __name__ == "__main__":
+    sampler.start()                          # background RSSI / ping / scan threads
+    # --lan: listen on every network interface so a phone on the same Wi-Fi can
+    # open the dashboard. Default: only this laptop (127.0.0.1).
+    host = "0.0.0.0" if "--lan" in sys.argv else "127.0.0.1"
     # debug=True shows errors; use_reloader=False stops Flask starting twice
-    # (which would also create a second, separate in-memory store).
-    app.run(host="127.0.0.1", port=5000, debug=True, use_reloader=False)
+    # (two samplers, two in-memory stores); threaded=True serves the live
+    # stream and normal requests at the same time.
+    app.run(host=host, port=5000, debug=True, use_reloader=False, threaded=True)

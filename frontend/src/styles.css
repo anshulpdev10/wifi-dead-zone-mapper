@@ -137,6 +137,33 @@ input[type='number'] { width: 100px; }
 .advice { margin: 8px 0 0; padding-left: 18px; font-size: 0.88rem; }
 .advice li { margin-bottom: 4px; }
 
+/* ---------------------------------------------------------------- guided survey */
+.guide { border-color: #9cc1fb; }
+.progress-track { height: 8px; border-radius: 999px; background: #e7ebf0; overflow: hidden; margin-bottom: 10px; }
+.progress-track div { height: 100%; background: var(--primary); transition: width 0.4s; }
+.guide-target { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.guide-target strong { flex-basis: 100%; font-size: 1.05rem; }
+.badge {
+  display: inline-grid; place-items: center; width: 24px; height: 24px;
+  border-radius: 50%; background: var(--primary); color: #fff; font-weight: 700; font-size: 0.85rem;
+}
+.guide-done { margin: 0; }
+button.link { border: none; background: none; padding: 6px 0 0; color: var(--primary); text-decoration: underline; }
+button.link:hover:not(:disabled) { background: none; }
+
+.position-readout { margin: 8px 0 0; font-size: 0.9rem; }
+
+/* ---------------------------------------------------------------- results */
+h3 { font-size: 0.9rem; margin: 12px 0 4px; }
+.verdict { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border-radius: 8px; }
+.verdict strong { font-size: 1.05rem; }
+.verdict.needed { background: #f1e9ff; border: 1px solid #c4a7f5; }
+.verdict.needed strong { color: #6d28d9; }
+.verdict.ok { background: #e3f6ea; border: 1px solid #8fd3a7; }
+.verdict.ok strong { color: #1e7b45; }
+.zones { margin: 0; padding-left: 20px; font-size: 0.88rem; }
+.zones li { margin-bottom: 3px; }
+
 /* ---------------------------------------------------------------- readings table */
 .table-scroll { max-height: 280px; overflow-y: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 0.85rem; font-variant-numeric: tabular-nums; }
@@ -159,3 +186,76 @@ th { position: sticky; top: 0; background: var(--card); color: var(--muted); fon
   .header-controls, .header-controls select { width: 100%; }
   .meter-value { font-size: 2.4rem; }
 }
+
+/* ================================================================ live version */
+/* ---------------------------------------------------------------- live indicator + tabs */
+.live-status { display: inline-flex; align-items: center; gap: 6px; font-size: 0.85rem; font-weight: 600; }
+.live-status .dot { width: 10px; height: 10px; margin: 0; border-radius: 50%; background: #9aa4b2; }
+.live-status.live .dot { background: #2BB673; box-shadow: 0 0 0 3px rgba(43, 182, 115, 0.25); }
+.live-status.disconnected { color: var(--danger); }
+.live-status.disconnected .dot { background: var(--danger); }
+
+.tabs { display: flex; gap: 4px; padding: 8px 20px 0; background: var(--card); border-bottom: 1px solid var(--border); }
+.tabs button { border: none; border-bottom: 3px solid transparent; border-radius: 0; background: none; padding: 8px 14px; font-weight: 600; color: var(--muted); }
+.tabs button[aria-selected='true'] { color: var(--text); border-bottom-color: var(--primary); }
+.single.wide { display: block; }
+
+/* ---------------------------------------------------------------- meter + graph */
+.meter-card { transition: background 0.3s, border-color 0.3s; }
+.meter-card.alert { background: #fde8e6; border-color: #E2513C; }
+.meter-card.alert .meter-value { color: #b42318; }
+.alert-text { margin: 6px 0 0; font-weight: 700; color: #b42318; }
+.live-graph { display: block; width: 100%; height: 110px; margin-top: 8px; background: #fafbfc; border: 1px solid var(--border); border-radius: 6px; }
+.graph-axis { display: flex; justify-content: space-between; margin-top: 2px; }
+
+/* ---------------------------------------------------------------- quality card */
+.stats.three { grid-template-columns: repeat(3, 1fr); }
+.stats .good dd { color: #1e7b45; }
+.stats .ok dd { color: #a15c00; }
+.stats .poor dd { color: #b42318; }
+
+/* ---------------------------------------------------------------- map extras */
+.busy-tag { font-size: 0.85rem; font-weight: 600; color: var(--primary); }
+.walk-note { background: #eef4ff; border-radius: 8px; padding: 8px 10px; }
+.map-wrap { position: relative; }
+.pulse {
+  position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px;
+  border: 3px solid; border-radius: 50%; pointer-events: none;
+  animation: pulse 1.4s ease-out 2 forwards;
+}
+@keyframes pulse {
+  from { transform: scale(1); opacity: 1; }
+  to { transform: scale(3.2); opacity: 0; }
+}
+.obstructed-mark { color: #d97706; }
+.swatch.ring { border: 2px dashed #d97706; border-radius: 50%; background: none; }
+
+/* ---------------------------------------------------------------- SVG charts */
+.scatter, .channel-chart { display: block; width: 100%; height: auto; margin-top: 8px; }
+.grid-line { stroke: #e3e7ec; stroke-width: 1; }
+.axis-text { font-size: 9px; fill: var(--muted); }
+.channel-chart .axis-text { font-size: 11px; }
+.axis-text.rec { fill: #1e7b45; font-weight: 700; }
+.axis-text.mine { fill: #1f6feb; font-weight: 700; }
+
+/* ---------------------------------------------------------------- networks tab */
+.networks { display: grid; gap: 16px; max-width: 1100px; margin: 0 auto; }
+.table-scroll.tall { max-height: 420px; }
+tr.mine td { background: #eef4ff; font-weight: 600; }
+.mine-tag { background: #1f6feb; color: #fff; margin-left: 6px; font-size: 0.7rem; }
+
+/* ---------------------------------------------------------------- reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+@media (max-width: 520px) {
+  .tabs { padding-left: 12px; padding-right: 12px; }
+  .stats.three { grid-template-columns: 1fr 1fr 1fr; }
+}
+
+/* ---------------------------------------------------------------- what-if */
+.floor-canvas.mode-whatif { cursor: grab; touch-action: none; }
+.compare { margin: 8px 0; }
+.compare td:not(:first-child), .compare th:not(:first-child) { text-align: right; }
+.up { color: #1e7b45; font-weight: 700; }
+.down { color: #b42318; font-weight: 700; }

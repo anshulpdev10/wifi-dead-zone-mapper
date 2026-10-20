@@ -5,20 +5,27 @@
 //   1. floor-plan image (optional)      5. measured points + dBm labels
 //   2. heatmap cells coloured by band   6. router (triangle)
 //   3. 1 m grid                         7. suggested extender (star)
-//   4. dashed outline of dead cells     8. live-signal ring + crosshair at my position
+//   4. dashed outline of dead cells     8. guided-survey targets (numbered circles)
+//                                       9. live-signal ring + crosshair at my position
+//                                      10. metre rulers along the top and left edges
+// (0, 0) is the TOP-LEFT corner: x = metres from the left wall, y = from the top wall.
 //
 // Keyboard: arrow keys move the crosshair 0.5 m (Shift = 0.1 m),
-// Enter places the router there when in "Place router" mode.
+// Enter measures there (or places the router in "Place router" mode).
 import { useEffect, useRef, useState } from 'react'
 import { bandFor, DEAD_DBM } from '../bands.js'
+import { describePosition } from '../guide.js'
 
 const HEATMAP_ALPHA = 0.55   // see-through so the plan image stays visible
+const GUIDE_COLOR = '#1f6feb'
 
-export default function FloorMap({ survey, readings, map, showHeatmap, mode, selected, live, onSelect, onPick }) {
+export default function FloorMap({ survey, readings, map, showHeatmap, mode, selected, live, guide,
+  obstructedIds, lastAddedId, whatIfMode, whatIf, onWhatIf, onSelect, onPick }) {
   const wrapRef = useRef(null)
   const canvasRef = useRef(null)
   const [boxWidth, setBoxWidth] = useState(600)
   const [planImage, setPlanImage] = useState(null)
+  const [hover, setHover] = useState(null)        // position under the mouse, in metres
 
   // Follow the width of the container so the map resizes with the window.
   useEffect(() => {
@@ -56,7 +63,9 @@ export default function FloorMap({ survey, readings, map, showHeatmap, mode, sel
     ctx.fillRect(0, 0, cssW, cssH)
     if (planImage) ctx.drawImage(planImage, 0, 0, cssW, cssH)
 
-    const grid = map?.ready ? map.grid : null
+    // What-if mode shows the PREDICTED map (router moved) instead of the measured one.
+    const shown = whatIf?.result || map
+    const grid = shown?.ready ? shown.grid : null
 
     // 2. Heatmap: one solid rectangle per grid cell, drawn on a hidden canvas
     //    first and then laid over the plan see-through in one go (drawing each
@@ -89,7 +98,7 @@ export default function FloorMap({ survey, readings, map, showHeatmap, mode, sel
 
     // 4. Dead-zone outline: draw a cell edge wherever a dead cell touches a non-dead cell
     //    (skipped for a preliminary map of 1-2 readings - too few to locate a dead zone)
-    if (grid && !map.partial) {
+    if (grid && !shown.partial) {
       const size = px(grid.cell)
       const isDead = (r, c) => r >= 0 && c >= 0 && r < grid.rows && c < grid.cols && grid.values[r][c] < DEAD_DBM
       ctx.beginPath()
@@ -122,6 +131,15 @@ export default function FloorMap({ survey, readings, map, showHeatmap, mode, sel
       ctx.lineWidth = 1.5
       ctx.strokeStyle = '#1b1f24'
       ctx.stroke()
+      if (obstructedIds?.has(reading.id)) {        // calibration: 8+ dB below the model
+        ctx.beginPath()
+        ctx.arc(x, y, 10, 0, Math.PI * 2)
+        ctx.setLineDash([3, 2])
+        ctx.lineWidth = 2
+        ctx.strokeStyle = '#d97706'
+        ctx.stroke()
+        ctx.setLineDash([])
+      }
       const label = Math.round(reading.rssi_mean).toString()
       ctx.lineWidth = 3
       ctx.strokeStyle = 'rgba(255,255,255,0.9)'      // white halo keeps text readable
@@ -130,21 +148,26 @@ export default function FloorMap({ survey, readings, map, showHeatmap, mode, sel
       ctx.fillText(label, x, y - 9)
     })
 
-    // 6. Router: blue triangle
-    if (survey.router) {
-      const x = px(survey.router.x), y = px(survey.router.y)
+    // 6. Router: blue triangle (faded in what-if mode, where an orange
+    //    "proposed" router shows the dragged position)
+    const triangle = (pos, color, alpha) => {
+      const x = px(pos.x), y = px(pos.y)
+      ctx.globalAlpha = alpha
       ctx.beginPath()
       ctx.moveTo(x, y - 11); ctx.lineTo(x + 10, y + 7); ctx.lineTo(x - 10, y + 7); ctx.closePath()
-      ctx.fillStyle = '#2563eb'
+      ctx.fillStyle = color
       ctx.fill()
       ctx.lineWidth = 2
       ctx.strokeStyle = '#ffffff'
       ctx.stroke()
+      ctx.globalAlpha = 1
     }
+    if (survey.router) triangle(survey.router, '#2563eb', whatIf ? 0.35 : 1)
+    if (whatIf) triangle(whatIf.router, '#ea580c', 1)
 
     // 7. Suggested extender: purple 5-point star
-    if (map?.ready && map.suggestion) {
-      const x = px(map.suggestion.x), y = px(map.suggestion.y)
+    if (shown?.ready && shown.suggestion) {
+      const x = px(shown.suggestion.x), y = px(shown.suggestion.y)
       ctx.beginPath()
       for (let i = 0; i < 10; i++) {
         const radius = i % 2 === 0 ? 12 : 5
@@ -159,7 +182,34 @@ export default function FloorMap({ survey, readings, map, showHeatmap, mode, sel
       ctx.stroke()
     }
 
-    // 8. My position: a 1 m ring coloured by the LIVE signal, then the crosshair
+    // 8. Guided-survey targets: the NEXT one is filled blue, the rest are
+    //    dashed outlines, skipped ones grey; finished ones are hidden (the
+    //    measured dot is already there).
+    if (guide) {
+      ctx.font = '700 12px system-ui, sans-serif'
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      guide.points.forEach((p) => {
+        if (p.done) return
+        const x = px(p.x), y = px(p.y)
+        const isNext = guide.next?.n === p.n
+        const color = p.skipped ? '#9aa4b2' : GUIDE_COLOR
+        ctx.beginPath()
+        ctx.arc(x, y, isNext ? 14 : 11, 0, Math.PI * 2)
+        ctx.fillStyle = isNext ? color : 'rgba(255,255,255,0.85)'
+        ctx.fill()
+        ctx.setLineDash(isNext ? [] : [4, 3])
+        ctx.lineWidth = 2
+        ctx.strokeStyle = color
+        ctx.stroke()
+        ctx.setLineDash([])
+        ctx.fillStyle = isNext ? '#ffffff' : color
+        ctx.fillText(String(p.n), x, y + 0.5)
+      })
+      ctx.textBaseline = 'alphabetic'
+    }
+
+    // 9. My position: a 1 m ring coloured by the LIVE signal, then the crosshair
     if (selected) {
       const x = px(selected.x), y = px(selected.y)
       if (live != null) {
@@ -193,7 +243,36 @@ export default function FloorMap({ survey, readings, map, showHeatmap, mode, sel
       ctx.lineWidth = 2
       ctx.stroke()
     }
-  }, [survey, readings, map, showHeatmap, selected, live, planImage, scale, cssW, cssH])
+
+    // 10. Metre rulers: tick + label every 1 m (2 m / 5 m on small screens)
+    const step = scale >= 45 ? 1 : scale >= 20 ? 2 : 5
+    ctx.font = '600 10px system-ui, sans-serif'
+    ctx.fillStyle = '#111827'
+    ctx.strokeStyle = 'rgba(255,255,255,0.9)'
+    const label = (text, x, y) => { ctx.lineWidth = 3; ctx.strokeText(text, x, y); ctx.fillText(text, x, y) }
+    ctx.textAlign = 'center'
+    for (let m = step; m < survey.width; m += step) {
+      ctx.fillRect(px(m) - 0.5, 0, 1, 6)
+      label(`${m}m`, px(m), 16)
+    }
+    ctx.textAlign = 'left'
+    for (let m = step; m < survey.height; m += step) {
+      ctx.fillRect(0, px(m) - 0.5, 6, 1)
+      label(`${m}m`, 8, px(m) + 3.5)
+    }
+    label('0', 3, 11)
+
+    // 11. What-if badge so a prediction is never mistaken for measured data
+    if (whatIf?.result) {
+      ctx.font = '700 12px system-ui, sans-serif'
+      ctx.textAlign = 'right'
+      ctx.fillStyle = '#ea580c'
+      label('PREDICTION – router moved', cssW - 8, cssH - 10)
+    }
+  }, [survey, readings, map, showHeatmap, selected, live, guide, obstructedIds, whatIf, planImage, scale, cssW, cssH])
+
+  // The newest point pulses once (CSS animation on a small overlay circle).
+  const newest = readings.find((r) => r.id === lastAddedId)
 
   // Round to 0.1 m and keep inside the floor.
   const toPoint = (x, y) => ({
@@ -201,9 +280,22 @@ export default function FloorMap({ survey, readings, map, showHeatmap, mode, sel
     y: Math.round(Math.min(Math.max(y, 0), survey.height) * 10) / 10,
   })
 
-  function handleClick(event) {
+  // Mouse position in pixels -> metres on the floor.
+  function eventToPoint(event) {
     const rect = canvasRef.current.getBoundingClientRect()
-    onPick(toPoint((event.clientX - rect.left) / scale, (event.clientY - rect.top) / scale))
+    return toPoint((event.clientX - rect.left) / scale, (event.clientY - rect.top) / scale)
+  }
+
+  function handleClick(event) {
+    if (whatIfMode) return                 // in what-if mode clicks only move the proposed router
+    onPick(eventToPoint(event))
+  }
+
+  // What-if: press and drag anywhere to move the proposed router.
+  function handlePointer(event) {
+    if (!whatIfMode || (event.type === 'pointermove' && event.buttons !== 1)) return
+    if (event.type === 'pointerdown') canvasRef.current.setPointerCapture(event.pointerId)
+    onWhatIf(eventToPoint(event))
   }
 
   function handleKeyDown(event) {
@@ -222,14 +314,28 @@ export default function FloorMap({ survey, readings, map, showHeatmap, mode, sel
     <div ref={wrapRef} className="map-wrap">
       <canvas
         ref={canvasRef}
-        className={`floor-canvas mode-${mode}`}
+        className={`floor-canvas mode-${whatIfMode ? 'whatif' : mode}`}
         style={{ width: cssW, height: cssH }}
         tabIndex={0}
         role="img"
         aria-label={`Floor map ${survey.width} by ${survey.height} metres. Click or use arrow keys to choose a position.`}
         onClick={handleClick}
         onKeyDown={handleKeyDown}
+        onMouseMove={(e) => setHover(eventToPoint(e))}
+        onPointerDown={handlePointer}
+        onPointerMove={handlePointer}
+        onMouseLeave={() => setHover(null)}
       />
+      {newest && (
+        <span key={newest.id} className="pulse" aria-hidden="true"
+          style={{ left: newest.x * scale, top: newest.y * scale, borderColor: bandFor(newest.rssi_mean).color }} />
+      )}
+      {/* Where am I? Live readout of the pointer / marker position in metres */}
+      <p className="position-readout" aria-live="polite">
+        {hover ? <>Pointer: <strong>{describePosition(hover)}</strong></>
+          : selected ? <>Marker: <strong>{describePosition(selected)}</strong></>
+          : 'Move the mouse over the map to see the distance from the walls.'}
+      </p>
     </div>
   )
 }

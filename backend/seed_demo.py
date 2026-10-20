@@ -14,10 +14,12 @@ Usage (with app.py running):   python seed_demo.py
 
 import json
 import math
+import os
 import random
 import urllib.request
 
-API = "http://127.0.0.1:5000/api"
+# Default: the normal backend. WIFI_API=http://127.0.0.1:5001/api points it elsewhere.
+API = os.getenv("WIFI_API", "http://127.0.0.1:5000/api")
 NAME = "Demo (simulated)"
 WIDTH, HEIGHT = 12, 8
 ROUTER = (2, 3)

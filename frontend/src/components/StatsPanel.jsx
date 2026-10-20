@@ -1,23 +1,55 @@
-// StatsPanel.jsx - coverage statistics and advice from GET /api/surveys/<id>/map.
-export default function StatsPanel({ map }) {
+// StatsPanel.jsx - results from GET /api/surveys/<id>/map:
+// extender verdict, dead zones (located in metres from the walls),
+// coverage statistics and advice. Marked "preliminary" until the guided
+// 10-point survey is finished.
+import { describePosition } from '../guide.js'
+
+export default function StatsPanel({ map, guideComplete }) {
   if (!map) return null
 
   // No readings yet, or only a preliminary heatmap (fewer than 3 readings).
   if (!map.ready || !map.stats) {
     return (
       <section className="card" aria-labelledby="stats-title">
-        <h2 id="stats-title">Coverage</h2>
+        <h2 id="stats-title">Results</h2>
         <p className="muted">{map.message}</p>
       </section>
     )
   }
 
   const s = map.stats
+  const ext = map.extender
   return (
     <section className="card" aria-labelledby="stats-title">
-      <h2 id="stats-title">Coverage</h2>
+      <h2 id="stats-title">
+        Results {!guideComplete && <span className="muted">(preliminary – finish the 10 points)</span>}
+      </h2>
 
-      {/* Stacked bar: healthy / marginal / dead share of the floor */}
+      {/* 1. The headline answer: is an extender required?
+             (skipped if an older backend without the "extender" field is running) */}
+      {ext && <div className={`verdict ${ext.needed ? 'needed' : 'ok'}`}>
+        <strong>{ext.needed ? '★ Extender required' : '✓ No extender needed'}</strong>
+        <span>{ext.reason}</span>
+        {map.suggestion && (
+          <span className="small">Extender spot: {describePosition(map.suggestion)} ({map.suggestion.rssi} dBm there)</span>
+        )}
+      </div>}
+
+      {/* 2. Dead zones, largest first */}
+      {map.regions.length > 0 && (
+        <>
+          <h3>Dead zones (&lt; −75 dBm)</h3>
+          <ol className="zones">
+            {map.regions.map((reg, i) => (
+              <li key={i}>
+                <strong>{reg.area_m2} m²</strong> around {describePosition(reg.center)} · worst {reg.worst_dbm} dBm
+              </li>
+            ))}
+          </ol>
+        </>
+      )}
+
+      {/* 3. Coverage statistics: stacked bar = healthy / marginal / dead share of the floor */}
       <div className="coverage-bar" aria-hidden="true">
         <div style={{ width: `${s.healthy_pct}%`, background: '#8CCB5E' }} />
         <div style={{ width: `${s.marginal_pct}%`, background: '#F2A93B' }} />
@@ -33,9 +65,6 @@ export default function StatsPanel({ map }) {
         <div><dt>Best / worst</dt><dd>{s.best_dbm} / {s.worst_dbm}</dd></div>
       </dl>
 
-      {map.regions.length > 0 && (
-        <p className="small muted">{map.regions.length} dead region(s) found.</p>
-      )}
       <ul className="advice">
         {map.advice.map((tip) => <li key={tip}>{tip}</li>)}
       </ul>
