@@ -1,0 +1,11 @@
+# Python
+backend/.venv/
+__pycache__/
+*.pyc
+
+# Secrets - never commit Supabase keys
+.env
+
+# Node / Vite
+frontend/node_modules/
+frontend/dist/

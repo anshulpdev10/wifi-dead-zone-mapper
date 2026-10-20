@@ -1,0 +1,307 @@
+"""
+app.py - Flask REST API for the Wi-Fi Dead-Zone & Signal Mapping System.
+
+Runs on http://127.0.0.1:5000 ON THE SAME LAPTOP that is walked around,
+because /measure reads this laptop's own Wi-Fi adapter (wifi_reader.py).
+
+Endpoints
+  GET    /api/health                      server + database status
+  GET    /api/rssi                        one live reading (for the signal meter)
+  GET    /api/surveys                     list surveys
+  POST   /api/surveys                     create {name, width, height, plan?}
+  GET    /api/surveys/<id>                one survey (with plan image + router)
+  PATCH  /api/surveys/<id>                change name / size / plan / router
+  DELETE /api/surveys/<id>                delete survey and its readings
+  GET    /api/surveys/<id>/readings       list readings
+  POST   /api/surveys/<id>/measure        {x, y, samples} -> measure here
+  POST   /api/surveys/<id>/readings       {x, y, rssi}    -> manual entry
+  DELETE /api/readings/<id>               delete one reading
+  GET    /api/surveys/<id>/map            heatmap grid, dead zones, suggestion, stats
+  GET    /api/surveys/<id>/export.csv     readings as a CSV file
+"""
+
+import csv
+import io
+import platform
+import statistics
+import time
+
+from dotenv import load_dotenv
+from flask import Flask, Response, jsonify, request
+from flask_cors import CORS
+from werkzeug.exceptions import HTTPException
+
+import db
+import mapping
+from wifi_reader import read_rssi
+
+load_dotenv()                      # reads backend/.env (SUPABASE_URL, SUPABASE_KEY)
+
+app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024   # 8 MB max request (floor-plan image)
+CORS(app)                          # allow the Vite dev server to call us
+
+store, db_message = db.connect()
+print(f"[db] mode={store.mode}: {db_message}")
+
+RSSI_MIN, RSSI_MAX = -110, -10     # anything outside this is not a real Wi-Fi reading
+SAMPLES_DEFAULT, SAMPLES_MIN, SAMPLES_MAX = 10, 3, 30
+
+
+# ------------------------------------------------------------------ helpers
+class ApiError(Exception):
+    """Raise this anywhere -> client gets {"error": message} with a status code."""
+    def __init__(self, message, status=400):
+        super().__init__(message)
+        self.message, self.status = message, status
+
+
+@app.errorhandler(ApiError)
+def handle_api_error(err):
+    return jsonify({"error": err.message}), err.status
+
+
+@app.errorhandler(404)
+def handle_404(_err):
+    return jsonify({"error": "Not found."}), 404
+
+
+@app.errorhandler(405)
+def handle_405(_err):
+    return jsonify({"error": "Method not allowed."}), 405
+
+
+@app.errorhandler(413)
+def handle_413(_err):
+    return jsonify({"error": "Request too large (max 8 MB). Use a smaller floor-plan image."}), 413
+
+
+@app.errorhandler(Exception)
+def handle_unexpected(err):
+    if isinstance(err, HTTPException):          # other HTTP errors keep their own code
+        return jsonify({"error": err.description}), err.code
+    app.logger.exception(err)
+    return jsonify({"error": f"Server error: {err}"}), 500
+
+
+def body():
+    """JSON body of the request as a dict (empty dict if missing)."""
+    data = request.get_json(silent=True)
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        raise ApiError("Request body must be a JSON object.")
+    return data
+
+
+def number(data, key, low=None, high=None, required=True):
+    """Read a numeric field and check its range."""
+    value = data.get(key)
+    if value is None or value == "":
+        if required:
+            raise ApiError(f"'{key}' is required.")
+        return None
+    if isinstance(value, bool):
+        raise ApiError(f"'{key}' must be a number.")
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        raise ApiError(f"'{key}' must be a number.")
+    if value != value:   # NaN
+        raise ApiError(f"'{key}' must be a number.")
+    if low is not None and value < low or high is not None and value > high:
+        raise ApiError(f"'{key}' must be between {low} and {high} (got {value:g}).")
+    return value
+
+
+def find_survey(survey_id):
+    survey = store.get_survey(survey_id)
+    if not survey:
+        raise ApiError("Survey not found.", 404)
+    return survey
+
+
+def point_in_floor(data, survey):
+    """x, y must lie inside the floor (0..width, 0..height metres)."""
+    x = number(data, "x", 0, survey["width"])
+    y = number(data, "y", 0, survey["height"])
+    return round(x, 2), round(y, 2)
+
+
+def validate_survey_fields(data, partial=False):
+    """Shared validation for POST (all fields) and PATCH (only given fields)."""
+    fields = {}
+    if "name" in data or not partial:
+        name = str(data.get("name") or "").strip()
+        if not name:
+            raise ApiError("'name' is required.")
+        if len(name) > 80:
+            raise ApiError("'name' must be at most 80 characters.")
+        fields["name"] = name
+    for key in ("width", "height"):
+        if key in data or not partial:
+            fields[key] = number(data, key, 1, 200)
+    if "plan" in data:
+        plan = data["plan"]
+        if plan not in (None, "") and (not isinstance(plan, str) or not plan.startswith("data:image/")):
+            raise ApiError("'plan' must be an image data URL (data:image/...).")
+        fields["plan"] = plan or None
+    return fields
+
+
+# ------------------------------------------------------------------ status
+@app.get("/api/health")
+def health():
+    return jsonify({"ok": True, "db": store.mode, "db_message": db_message,
+                    "platform": platform.system()})
+
+
+@app.get("/api/rssi")
+def live_rssi():
+    return jsonify(read_rssi())
+
+
+# ------------------------------------------------------------------ surveys
+@app.get("/api/surveys")
+def list_surveys():
+    return jsonify(store.list_surveys())
+
+
+@app.post("/api/surveys")
+def create_survey():
+    survey = store.create_survey(validate_survey_fields(body()))
+    return jsonify(survey), 201
+
+
+@app.get("/api/surveys/<survey_id>")
+def get_survey(survey_id):
+    return jsonify(find_survey(survey_id))
+
+
+@app.patch("/api/surveys/<survey_id>")
+def update_survey(survey_id):
+    survey = find_survey(survey_id)
+    data = body()
+    fields = validate_survey_fields(data, partial=True)
+    size = {"width": fields.get("width", survey["width"]),
+            "height": fields.get("height", survey["height"])}
+    if "router" in data:
+        # router is either null (removed) or a point {x, y} inside the floor.
+        router = data["router"]
+        if router is None:
+            fields["router"] = None
+        elif isinstance(router, dict):
+            x, y = point_in_floor(router, size)
+            fields["router"] = {"x": x, "y": y}
+        else:
+            raise ApiError("'router' must be {\"x\": .., \"y\": ..} or null.")
+    if not fields:
+        raise ApiError("Nothing to update. Send name, width, height, plan or router.")
+    return jsonify(store.update_survey(survey_id, fields))
+
+
+@app.delete("/api/surveys/<survey_id>")
+def delete_survey(survey_id):
+    if not store.delete_survey(survey_id):
+        raise ApiError("Survey not found.", 404)
+    return jsonify({"deleted": survey_id})
+
+
+# ------------------------------------------------------------------ readings
+@app.get("/api/surveys/<survey_id>/readings")
+def list_readings(survey_id):
+    find_survey(survey_id)
+    return jsonify(store.list_readings(survey_id))
+
+
+def summarise(samples):
+    """Mean / standard deviation / min / max of a list of dBm samples."""
+    return {
+        "rssi_mean": round(statistics.fmean(samples), 2),
+        "rssi_std": round(statistics.pstdev(samples), 2),
+        "min": min(samples),
+        "max": max(samples),
+        "samples": samples,
+    }
+
+
+@app.post("/api/surveys/<survey_id>/measure")
+def measure(survey_id):
+    """Take N samples, 1 second apart, at the user's current position.
+    Averaging smooths out the natural second-to-second fluctuation (fading)."""
+    survey = find_survey(survey_id)
+    data = body()
+    x, y = point_in_floor(data, survey)
+    n = int(number(data, "samples", required=False) or SAMPLES_DEFAULT)
+    n = max(SAMPLES_MIN, min(SAMPLES_MAX, n))      # clamp to 3..30
+
+    samples, last = [], None
+    for i in range(n):
+        if i:
+            time.sleep(1)
+        last = read_rssi()
+        if last["rssi"] is not None:
+            samples.append(last["rssi"])
+        elif i == 0:
+            # First read failed (Wi-Fi off, Location blocked...) - stop immediately.
+            raise ApiError(last["error"], 503)
+
+    if len(samples) < SAMPLES_MIN:
+        raise ApiError(f"Only {len(samples)} of {n} samples succeeded: {last['error']}", 503)
+
+    reading = store.add_reading({"survey_id": survey_id, "x": x, "y": y,
+                                 **summarise(samples),
+                                 "ssid": last["ssid"], "method": last["method"]})
+    return jsonify(reading), 201
+
+
+@app.post("/api/surveys/<survey_id>/readings")
+def manual_reading(survey_id):
+    """Manual entry, e.g. a value read from a phone app (one value = one sample)."""
+    survey = find_survey(survey_id)
+    data = body()
+    x, y = point_in_floor(data, survey)
+    rssi = round(number(data, "rssi", RSSI_MIN, RSSI_MAX), 1)
+    reading = store.add_reading({"survey_id": survey_id, "x": x, "y": y,
+                                 **summarise([rssi]),
+                                 "ssid": data.get("ssid") or None, "method": "manual"})
+    return jsonify(reading), 201
+
+
+@app.delete("/api/readings/<reading_id>")
+def delete_reading(reading_id):
+    if not store.delete_reading(reading_id):
+        raise ApiError("Reading not found.", 404)
+    return jsonify({"deleted": reading_id})
+
+
+# ------------------------------------------------------------------ analysis
+@app.get("/api/surveys/<survey_id>/map")
+def coverage_map(survey_id):
+    survey = find_survey(survey_id)
+    cell = number(request.args, "cell", 0.1, 2, required=False) or 0.25
+    result = mapping.compute_map(survey["width"], survey["height"],
+                                 store.list_readings(survey_id), cell)
+    return jsonify(result)
+
+
+@app.get("/api/surveys/<survey_id>/export.csv")
+def export_csv(survey_id):
+    survey = find_survey(survey_id)
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerow(["x_m", "y_m", "rssi_mean_dbm", "rssi_std_db", "min_dbm", "max_dbm",
+                     "n_samples", "band", "ssid", "method", "time"])
+    for r in store.list_readings(survey_id):
+        writer.writerow([r["x"], r["y"], r["rssi_mean"], r["rssi_std"], r["min"], r["max"],
+                         len(r["samples"]), mapping.band_name(r["rssi_mean"]),
+                         r.get("ssid") or "", r.get("method") or "", r["time"]])
+    safe_name = "".join(ch if ch.isalnum() else "_" for ch in survey["name"]) or "survey"
+    return Response(out.getvalue(), mimetype="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="{safe_name}.csv"'})
+
+
+if __name__ == "__main__":
+    # debug=True shows errors; use_reloader=False stops Flask starting twice
+    # (which would also create a second, separate in-memory store).
+    app.run(host="127.0.0.1", port=5000, debug=True, use_reloader=False)
