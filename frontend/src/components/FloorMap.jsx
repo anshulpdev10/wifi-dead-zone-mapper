@@ -262,6 +262,18 @@ export default function FloorMap({ survey, readings, map, showHeatmap, mode, sel
     }
     label('0', 3, 11)
 
+    // Room directions: show which real corner / wall the map's top-left / top edge is.
+    if (survey.setup) {
+      ctx.font = '700 11px system-ui, sans-serif'
+      ctx.fillStyle = '#1f6feb'
+      ctx.textAlign = 'center'
+      label(`▲ ${survey.setup.wall}`, cssW / 2, 30)
+      ctx.textAlign = 'left'
+      ctx.fillStyle = '#ea580c'
+      label(`● ${survey.setup.corner}`, 8, 28)
+      ctx.fillStyle = '#111827'
+    }
+
     // 11. What-if badge so a prediction is never mistaken for measured data
     if (whatIf?.result) {
       ctx.font = '700 12px system-ui, sans-serif'
@@ -332,8 +344,8 @@ export default function FloorMap({ survey, readings, map, showHeatmap, mode, sel
       )}
       {/* Where am I? Live readout of the pointer / marker position in metres */}
       <p className="position-readout" aria-live="polite">
-        {hover ? <>Pointer: <strong>{describePosition(hover)}</strong></>
-          : selected ? <>Marker: <strong>{describePosition(selected)}</strong></>
+        {hover ? <>Pointer: <strong>{describePosition(hover, survey.setup)}</strong></>
+          : selected ? <>Marker: <strong>{describePosition(selected, survey.setup)}</strong></>
           : 'Move the mouse over the map to see the distance from the walls.'}
       </p>
     </div>

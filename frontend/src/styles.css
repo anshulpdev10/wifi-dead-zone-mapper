@@ -259,3 +259,30 @@ tr.mine td { background: #eef4ff; font-weight: 600; }
 .compare td:not(:first-child), .compare th:not(:first-child) { text-align: right; }
 .up { color: #1e7b45; font-weight: 700; }
 .down { color: #b42318; font-weight: 700; }
+
+/* ---------------------------------------------------------------- room directions + hands-free */
+.setup-form { display: flex; flex-direction: column; gap: 6px; }
+.setup-form input:not([type='checkbox']) { width: 100%; }
+.row.tight { gap: 6px; margin-top: 6px; }
+.row.tight input[type='number'] { width: 64px; }
+.row.tight #su-step { width: 80px; }
+.setup-diagram { width: 100%; max-width: 320px; height: auto; margin: 4px 0; }
+.diagram-text { font-size: 10px; fill: #1b1f24; }
+.diagram-text.strong { font-weight: 700; fill: #1f6feb; }
+.room-line { margin: 0 0 8px; }
+button.link.inline { padding: 0; display: inline; }
+
+.auto-status { border-radius: 10px; padding: 10px 12px; margin-bottom: 4px; background: #eef4ff; border: 2px solid #9cc1fb; }
+.auto-status.measure { background: #fff4d6; border-color: #f2c94c; }
+.auto-status strong { font-size: 1.1rem; margin-left: 6px; }
+.auto-status p { margin: 6px 0 0; }
+.countdown { float: right; font-size: 1.6rem; font-weight: 800; font-variant-numeric: tabular-nums; color: var(--primary); }
+kbd { border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; font-size: 0.8rem; background: #fff; }
+.last-result { margin: 8px 0 0; }
+.last-result.unstable { color: #a15c00; }
+
+.placement { margin-top: 10px; }
+.placement summary { cursor: pointer; font-weight: 600; font-size: 0.9rem; }
+.sheet-list { padding-left: 22px; font-size: 0.88rem; }
+.sheet-list li { margin-bottom: 4px; }
+.sheet-list li.done { color: var(--muted); }

@@ -40,7 +40,27 @@ export function guideStatus(width, height, readings, skipped) {
   return { points, next, doneCount, complete: !next }
 }
 
-// "3.6 m from left wall · 2.0 m from top wall" - (0, 0) is the top-left corner.
-export function describePosition(point) {
-  return `${point.x.toFixed(1)} m from left wall · ${point.y.toFixed(1)} m from top wall`
+// ---------------------------------------------------------------- directions
+// The app cannot know where the real walls are, so the user tells it once
+// (survey.setup):  corner = the real corner at the map's top-left (0, 0),
+//                  wall   = the real wall along the map's top edge,
+//                  step_m = their step length, to give directions in steps.
+// x is then "metres along that wall from the corner", y is "metres into the room".
+
+const steps = (metres, setup) =>
+  setup?.step_m ? Math.max(0, Math.round(metres / setup.step_m)) : null
+
+// Short form for labels: "6.0 m along window wall · 2.0 m into room"
+export function describePosition(point, setup) {
+  if (!setup) return `${point.x.toFixed(1)} m from left wall · ${point.y.toFixed(1)} m from top wall`
+  return `${point.x.toFixed(1)} m along ${setup.wall} · ${point.y.toFixed(1)} m into room`
+}
+
+// Full instruction (shown + spoken):
+// "From the door corner: 6.0 m (8 steps) along the window wall, then 2.0 m (3 steps) into the room."
+export function directions(point, setup) {
+  if (!setup) return `Go ${point.x.toFixed(1)} m from the left wall and ${point.y.toFixed(1)} m from the top wall.`
+  const sx = steps(point.x, setup), sy = steps(point.y, setup)
+  return `From the ${setup.corner}: ${point.x.toFixed(1)} m${sx != null ? ` (${sx} steps)` : ''} along the ` +
+    `${setup.wall}, then ${point.y.toFixed(1)} m${sy != null ? ` (${sy} steps)` : ''} into the room.`
 }

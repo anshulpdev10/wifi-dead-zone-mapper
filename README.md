@@ -26,7 +26,7 @@ frontend/  React 18 + Vite dashboard, plain CSS, HTML canvas + inline SVG (no ch
 
 1. Create a project at https://supabase.com.
 2. Open **SQL Editor → New query**, paste all of `backend/schema.sql`, and click **Run**.
-   It is safe to run again. Re-running it adds the newer `channel`, `band` and `mode` columns.
+   It is safe to run again. Re-running it adds the newer `channel`, `band`, `mode` and `setup` columns.
 3. Open **Project Settings → API / API Keys** and copy the **Project URL** and the
    **secret / service_role key**.
 4. Copy `backend/.env.example` to `backend/.env` and fill in both values.
@@ -82,8 +82,6 @@ laptop and tap your position on the phone. If Windows Firewall asks, allow Node.
 (**Measure / Walk / Place router**), and the **Live / Disconnected** indicator for the
 live stream (it reconnects by itself).
 
-Before you start, decide which real wall is the map's **left** wall and which is the
-**top** wall: (0, 0) is the top-left corner, and the rulers are in metres.
 
 | Mode | A click on the map… |
 |---|---|
@@ -91,9 +89,29 @@ Before you start, decide which real wall is the map's **left** wall and which is
 | **Walk** | saves a quick **3-sample** reading at once (~3 s). Click-click-click as you walk; the heatmap redraws after each one. |
 | **Place router** | sets the router position (needed for calibration and what-if). |
 
-**Guided 10-point survey.** Every survey shows 10 numbered targets (an even 5 × 2 grid,
-in snake order). The Guide panel says exactly where to go, e.g. *"Walk to point 3:
-6.0 m from left wall · 2.0 m from top wall"*. Then press **I'm here – measure**.
+### The guided, hands-free survey (recommended)
+
+The laptop can't sense where it is indoors: it has no GPS, Windows' location estimate is
+off by kilometres, and even phone GPS is off by 5–20 m indoors. So positions come from
+**10 marked spots**, the same way professional site surveys work. No floor plan is needed.
+
+1. **Line the map up with your room (once per survey).** Stand in a corner and name it
+   (e.g. *door corner*); that corner is the map's top-left. Name the wall running along
+   the map's top edge (e.g. *window wall*). Optionally enter your step length, or let
+   the app work it out: "I walked 8 steps over 6 m" gives 0.75 m. With no tape measure,
+   pace the room size too: steps × step length.
+2. **Mark the floor.** Open *Placement sheet* (or **Print sheet**). Each of the 10 spots
+   is written in your words, e.g. *"From the door corner: 6.0 m (8 steps) along the window
+   wall, then 2.0 m (3 steps) into the room."* Put a numbered paper note on each spot.
+3. **Press ▶ Start hands-free** and pick up the laptop. For each point, the laptop
+   **says** where to go and counts down (walking time: 5–30 s). It then beeps, measures
+   for the chosen time, and announces the result (e.g. *"Point 3: −72 dBm, Fair"*).
+   Then it moves on. Press **Space** when you reach a note to measure right away.
+   **Skip point** handles a spot you can't reach; **Pause** stops it.
+4. If a reading wobbled (standard deviation > 4 dB), it says so and offers **Redo point N**.
+5. After the last point it announces the verdict: *extender required or not*.
+
+The heatmap, dead zones and verdict update after every point.
 
 **Right panel**
 1. **Live signal:** big dBm number, band, SSID, channel and band, and a 60-second graph
@@ -173,5 +191,7 @@ Errors are always JSON: `{"error": "..."}` with status 400/404/409/503.
 | Supabase "permission denied" / empty lists | Use the secret / service_role key, not the anon key. |
 | RSSI barely changes | Windows refreshes it every few seconds and it is stable when you stand still. Use Measure with 10 s or more per spot. |
 | Calibration says "need 5 readings" | Place the router and take 5+ readings at different distances (0.5 m or more from it). |
+| "Saving room directions needs the new 'setup' column" | Re-run `backend/schema.sql` in the Supabase SQL Editor. |
+| No voice during hands-free | Tick *Voice* in the Guide panel and check the laptop's volume. Speech uses the browser's built-in voices. |
 | Phone can't open the dashboard | Use `npm run dev:lan`, the same Wi-Fi, and allow Node.js through the Windows Firewall (private networks). |
 | Linux: no reading / no scan | Check `/proc/net/wireless`, and install `iw` / `wireless-tools` and NetworkManager (`nmcli`). |

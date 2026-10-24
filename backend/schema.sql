@@ -35,6 +35,9 @@ create index if not exists readings_survey_idx on readings(survey_id);
 alter table readings add column if not exists channel integer;
 alter table readings add column if not exists band    text;     -- "2.4 GHz" / "5 GHz"
 alter table readings add column if not exists mode    text;     -- "measure" | "walk" | "manual"
+-- How to find the guided points in the real room:
+-- {"corner": "door corner", "wall": "window wall", "step_m": 0.75}
+alter table surveys  add column if not exists setup   jsonb;
 
 -- Row Level Security is on, with no public policies: only the backend, using
 -- the secret / service_role key from backend/.env, can read and write.

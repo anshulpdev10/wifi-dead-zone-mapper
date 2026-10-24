@@ -4,7 +4,7 @@
 // 10-point survey is finished.
 import { describePosition } from '../guide.js'
 
-export default function StatsPanel({ map, guideComplete }) {
+export default function StatsPanel({ map, guideComplete, setup }) {
   if (!map) return null
 
   // No readings yet, or only a preliminary heatmap (fewer than 3 readings).
@@ -31,7 +31,7 @@ export default function StatsPanel({ map, guideComplete }) {
         <strong>{ext.needed ? '★ Extender required' : '✓ No extender needed'}</strong>
         <span>{ext.reason}</span>
         {map.suggestion && (
-          <span className="small">Extender spot: {describePosition(map.suggestion)} ({map.suggestion.rssi} dBm there)</span>
+          <span className="small">Extender spot: {describePosition(map.suggestion, setup)} ({map.suggestion.rssi} dBm there)</span>
         )}
       </div>}
 
@@ -42,7 +42,7 @@ export default function StatsPanel({ map, guideComplete }) {
           <ol className="zones">
             {map.regions.map((reg, i) => (
               <li key={i}>
-                <strong>{reg.area_m2} m²</strong> around {describePosition(reg.center)} · worst {reg.worst_dbm} dBm
+                <strong>{reg.area_m2} m²</strong> around {describePosition(reg.center, setup)} · worst {reg.worst_dbm} dBm
               </li>
             ))}
           </ol>

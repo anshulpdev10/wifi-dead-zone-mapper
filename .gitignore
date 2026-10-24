@@ -9,3 +9,18 @@ __pycache__/
 # Node / Vite
 frontend/node_modules/
 frontend/dist/
+
+# Added by push-to-github.ps1
+node_modules/
+.env.*
+!.env.example
+venv/
+.venv/
+env/
+.pytest_cache/
+dist/
+build/
+.expo/
+.DS_Store
+Thumbs.db
+*.log

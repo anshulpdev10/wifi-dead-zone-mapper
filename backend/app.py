@@ -75,6 +75,11 @@ def handle_api_error(err):
     return jsonify({"error": err.message}), err.status
 
 
+@app.errorhandler(db.SchemaOutdated)
+def handle_schema_outdated(err):
+    return jsonify({"error": str(err)}), 409
+
+
 @app.errorhandler(404)
 def handle_404(_err):
     return jsonify({"error": "Not found."}), 404
@@ -160,7 +165,31 @@ def validate_survey_fields(data, partial=False):
         if plan not in (None, "") and (not isinstance(plan, str) or not plan.startswith("data:image/")):
             raise ApiError("'plan' must be an image data URL (data:image/...).")
         fields["plan"] = plan or None
+    if "setup" in data:
+        fields["setup"] = validate_setup(data["setup"])
     return fields
+
+
+def validate_setup(setup):
+    """Room directions for the guided survey (or null):
+       corner = the real corner at the map's top-left (0, 0), e.g. "door corner"
+       wall   = the real wall along the map's top edge, e.g. "window wall"
+       step_m = the user's step length in metres (optional), to give directions in steps"""
+    if setup is None:
+        return None
+    if not isinstance(setup, dict):
+        raise ApiError("'setup' must be an object {corner, wall, step_m} or null.")
+    clean = {}
+    for key in ("corner", "wall"):
+        text = str(setup.get(key) or "").strip()
+        if not text:
+            raise ApiError(f"'setup.{key}' is required (e.g. 'door corner', 'window wall').")
+        if len(text) > 40:
+            raise ApiError(f"'setup.{key}' must be at most 40 characters.")
+        clean[key] = text
+    step = number(setup, "step_m", 0.3, 1.2, required=False)
+    clean["step_m"] = round(step, 2) if step else None
+    return clean
 
 
 # ------------------------------------------------------------------ status + live data
@@ -255,7 +284,7 @@ def update_survey(survey_id):
         else:
             raise ApiError("'router' must be {\"x\": .., \"y\": ..} or null.")
     if not fields:
-        raise ApiError("Nothing to update. Send name, width, height, plan or router.")
+        raise ApiError("Nothing to update. Send name, width, height, plan, router or setup.")
     updated = store.update_survey(survey_id, fields)
     sampler.publish("survey", {"survey_id": survey_id})   # other dashboards reload it
     return jsonify(updated)

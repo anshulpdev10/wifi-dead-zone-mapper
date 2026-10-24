@@ -12,6 +12,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from './api.js'
 import { describePosition, guideStatus } from './guide.js'
 import { useLiveStream } from './useLiveStream.js'
+import { useAutoSurvey } from './useAutoSurvey.js'
+import { say } from './sound.js'
 import CalibrationPanel from './components/CalibrationPanel.jsx'
 import FloorMap from './components/FloorMap.jsx'
 import GuidePanel from './components/GuidePanel.jsx'
@@ -51,6 +53,8 @@ export default function App() {
   const [lastAddedId, setLastAddedId] = useState(null) // newest point pulses on the map
   const [notice, setNotice] = useState(null)          // {kind: 'ok' | 'error', text}
   const [skipped, setSkipped] = useState([])          // guided target numbers the user skipped
+  const [walkSeconds, setWalkSeconds] = useState(10)  // hands-free: time to walk to the next point
+  const [voice, setVoice] = useState(true)            // hands-free: speak instructions
   const [whatIfMode, setWhatIfMode] = useState(false)
   const [whatIf, setWhatIf] = useState(null)          // {router, result} or {router, error}
   const surveyIdRef = useRef(null)
@@ -58,6 +62,8 @@ export default function App() {
   const refreshTimer = useRef(null)
   const whatIfBusy = useRef(false)                    // one prediction request at a time
   const whatIfNext = useRef(null)                     // latest drag position while busy
+  const mapRef = useRef(null)
+  mapRef.current = map
 
   // Live data: one sample per second + "a reading was saved" events.
   const stream = useLiveStream((type, data) => {
@@ -84,6 +90,34 @@ export default function App() {
     () => new Set((calibration?.points || []).filter((p) => p.obstructed).map((p) => p.id)),
     [calibration]
   )
+
+  // Hands-free guided survey: speaks the next target, counts down, measures, repeats.
+  const auto = useAutoSurvey({
+    guide, setup: survey?.setup, walkSeconds, voice,
+    measurePoint: (point) => { setSelected(point); return measureAt(point) },
+    onSkip: (n) => setSkipped((list) => [...list, n]),
+    onComplete: () => {
+      const ext = mapRef.current?.extender
+      const text = 'Survey complete. ' + (ext ? (ext.needed ? 'An extender is required. ' : 'No extender is needed. ') + ext.reason : '')
+      showOk(text)
+      if (voice) say(text.replace('m²', 'square metres'))
+    },
+  })
+
+  // Space = "I'm here, measure now" while the hands-free survey is walking.
+  useEffect(() => {
+    if (!auto.running) return
+    const onKey = (e) => {
+      if (e.code !== 'Space' || ['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON'].includes(e.target.tagName)) return
+      e.preventDefault()
+      auto.measureNow()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [auto.running, auto.phase])
+
+  // Switching survey stops a hands-free run.
+  useEffect(() => { if (auto.running) auto.pause() }, [surveyId])
 
   const showError = (err) => setNotice({ kind: 'error', text: err.message })
   const showOk = (text) => setNotice({ kind: 'ok', text })
@@ -185,7 +219,7 @@ export default function App() {
     if (mode === 'router') {
       try {
         setSurvey(await api.patch(`/surveys/${surveyId}`, { router: point }))
-        showOk(`Router placed at ${describePosition(point)}.`)
+        showOk(`Router placed at ${describePosition(point, survey.setup)}.`)
         scheduleRefresh()                            // calibration depends on the router
       } catch (err) {
         showError(err)
@@ -199,24 +233,34 @@ export default function App() {
       return
     }
     setSelected(point)
+    if (auto.running) return                       // hands-free decides when to measure
     if (mode === 'walk') walkAt(point)
     else if (autoMeasure) measureAt(point)
   }
 
   // Shared by Measure and Walk: run the request, show the result, refresh.
+  // Returns the saved reading, or null if it failed (used by hands-free mode).
   async function record(kind, request) {
     setBusy(kind)
     setNotice(null)
     try {
       const r = await request()
       setLastAddedId(r.id)
-      showOk(`Saved ${r.rssi_mean} dBm ± ${r.rssi_std} at ${describePosition(r)} (${r.samples.length} samples).`)
+      showOk(`Saved ${r.rssi_mean} dBm ± ${r.rssi_std} at ${describePosition(r, survey?.setup)} (${r.samples.length} samples).`)
       await refreshReadings()
+      return r
     } catch (err) {
       showError(err)
+      return null
     } finally {
       setBusy(null)
     }
+  }
+
+  // Room directions (corner / wall / step length) for the guided survey.
+  async function handleSaveSetup(setup) {
+    setSurvey(await api.patch(`/surveys/${surveyId}`, { setup }))   // errors shown by the form
+    showOk('Room directions saved. Print the placement sheet or press “Start hands-free”.')
   }
 
   // Measure: the backend averages `samples` fresh samples (1 per second).
@@ -245,7 +289,7 @@ export default function App() {
   async function applyWhatIf() {
     try {
       setSurvey(await api.patch(`/surveys/${surveyId}`, { router: whatIf.router }))
-      showOk(`Router set to ${describePosition(whatIf.router)}. Re-survey to confirm the prediction.`)
+      showOk(`Router set to ${describePosition(whatIf.router, survey.setup)}. Re-survey to confirm the prediction.`)
       setWhatIfMode(false); setWhatIf(null)
       scheduleRefresh()
     } catch (err) {
@@ -372,25 +416,30 @@ export default function App() {
               whatIfMode={whatIfMode} whatIf={whatIf} onWhatIf={handleWhatIf}
               onSelect={setSelected} onPick={handlePick} />
             <p className="muted small">
-              {hint} Top-left corner = 0 m; pick which real wall is “left” and “top” before you start.
+              {hint}{' '}
+              {survey.setup
+                ? `Map top-left = ${survey.setup.corner}; top edge = ${survey.setup.wall}.`
+                : 'Set the room directions in the Guide panel so the map matches your room.'}
             </p>
             <Legend />
           </section>
 
           <aside className="side-panel">
-            <GuidePanel guide={guide} measuring={!!busy} samples={samples}
+            <GuidePanel guide={guide} setup={survey.setup} auto={auto} measuring={!!busy} samples={samples}
+              walkSeconds={walkSeconds} onWalkSecondsChange={setWalkSeconds} voice={voice} onVoiceChange={setVoice}
               onMeasurePoint={(p) => { const point = { x: p.x, y: p.y }; setSelected(point); measureAt(point) }}
               onSkip={(n) => setSkipped((list) => [...list, n])}
-              onResetSkips={() => setSkipped([])} />
+              onResetSkips={() => setSkipped([])} onSaveSetup={handleSaveSetup}
+              onRedo={handleDeleteReading} />
             <SignalMeter samples={stream.samples} latest={stream.latest} status={stream.status} />
             <MeasurePanel mode={mode} selected={selected} measuring={!!busy}
               samples={samples} onSamplesChange={setSamples}
               autoMeasure={autoMeasure} onAutoChange={setAutoMeasure}
               onMeasure={() => measureAt(selected)} onManual={handleManual} />
             <QualityCard latest={stream.latest} />
-            <StatsPanel map={map} guideComplete={guide.complete} />
+            <StatsPanel map={map} guideComplete={guide.complete} setup={survey.setup} />
             <CalibrationPanel calibration={calibration} />
-            <WhatIfCard calibration={calibration} whatIfMode={whatIfMode} whatIf={whatIf} current={map}
+            <WhatIfCard calibration={calibration} whatIfMode={whatIfMode} whatIf={whatIf} current={map} setup={survey.setup}
               onToggle={(on) => { setWhatIfMode(on); if (!on) setWhatIf(null) }} onApply={applyWhatIf} />
             <ReadingsList surveyId={surveyId} readings={readings} obstructedIds={obstructedIds}
               onDeleteReading={handleDeleteReading} onDeleteSurvey={handleDeleteSurvey} />

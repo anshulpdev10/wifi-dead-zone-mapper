@@ -21,6 +21,10 @@ SURVEY_SUMMARY = ("id", "name", "width", "height", "created")
 NEW_READING_COLUMNS = ("channel", "band", "mode")
 
 
+class SchemaOutdated(Exception):
+    """The Supabase tables are older than the code - re-run schema.sql."""
+
+
 def _now():
     return datetime.now(timezone.utc).isoformat()
 
@@ -49,7 +53,7 @@ class MemoryStore:
         return self.surveys.get(survey_id)
 
     def create_survey(self, data):
-        survey = {"id": str(uuid.uuid4()), "created": _now(), "plan": None, "router": None, **data}
+        survey = {"id": str(uuid.uuid4()), "created": _now(), "plan": None, "router": None, "setup": None, **data}
         self.surveys[survey["id"]] = survey
         return survey
 
@@ -96,6 +100,16 @@ class SupabaseStore:
             self.missing_columns = False
         except Exception:
             self.missing_columns = True
+        try:   # surveys.setup (room directions for the guided survey)
+            self.client.table("surveys").select("setup").limit(1).execute()
+            self.has_setup = True
+        except Exception:
+            self.has_setup = False
+
+    def _check_setup(self, data):
+        if "setup" in data and not self.has_setup:
+            raise SchemaOutdated("Saving room directions needs the new 'setup' column - "
+                                 "re-run backend/schema.sql in the Supabase SQL Editor.")
 
     def _table(self, name):
         return self.client.table(name)
@@ -125,11 +139,15 @@ class SupabaseStore:
         return rows[0] if rows else None
 
     def create_survey(self, data):
+        if not self.has_setup and data.get("setup") is None:
+            data = {k: v for k, v in data.items() if k != "setup"}
+        self._check_setup(data)
         return self._run(self._table("surveys").insert(data), retry=False)[0]
 
     def update_survey(self, survey_id, fields):
         if not _is_uuid(survey_id):
             return None
+        self._check_setup(fields)
         rows = self._run(self._table("surveys").update(fields).eq("id", survey_id))
         return rows[0] if rows else None
 
@@ -166,9 +184,9 @@ def connect():
         return MemoryStore(), "SUPABASE_URL / SUPABASE_KEY not set in backend/.env - using in-memory storage."
     try:
         store = SupabaseStore(url, key)
-        if store.missing_columns:
-            return store, (f"Connected to Supabase ({url}), but the readings table has no "
-                           "channel/band/mode columns yet - re-run schema.sql to store them.")
+        if store.missing_columns or not store.has_setup:
+            return store, (f"Connected to Supabase ({url}), but the tables are missing the newest "
+                           "columns (channel/band/mode, setup) - re-run schema.sql to add them.")
         return store, f"Connected to Supabase ({url})."
     except Exception as exc:   # bad key, no internet, tables missing...
         return MemoryStore(), f"Supabase unreachable ({exc}) - using in-memory storage."
