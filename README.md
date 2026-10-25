@@ -1,10 +1,12 @@
 # Wi-Fi Dead-Zone & Signal Mapping System
 
 The laptop is the signal reader. A Flask backend on the same laptop reads the
-laptop's own Wi-Fi signal **every second**. In a React dashboard you mark your
-position on a floor plan as you walk; readings are saved, and the heatmap, dead
-zones and statistics update live. It also scans nearby networks, shows channel
-congestion, and calibrates the log-distance path-loss model from your own data.
+laptop's own Wi-Fi signal **every second**. In a React dashboard you either measure
+**room by room** (Classroom, Lab, Bedroom… → which rooms are dead zones, and where an
+extender should go) or run **Survey around me** (pick a range of 5–50 m, tap where you
+are as you walk → live heatmap, dead zones and extender spot). It also scans nearby
+networks, shows channel congestion, and calibrates the log-distance path-loss model
+from your own data.
 
 ```
 backend/   Python Flask API, background sampler, Supabase (falls back to in-memory)
@@ -26,7 +28,7 @@ frontend/  React 18 + Vite dashboard, plain CSS, HTML canvas + inline SVG (no ch
 
 1. Create a project at https://supabase.com.
 2. Open **SQL Editor → New query**, paste all of `backend/schema.sql`, and click **Run**.
-   It is safe to run again. Re-running it adds the newer `channel`, `band`, `mode` and `setup` columns.
+   It is safe to run again. Re-running it adds the newer `channel`, `band`, `mode`, `room` and `setup` columns.
 3. Open **Project Settings → API / API Keys** and copy the **Project URL** and the
    **secret / service_role key**.
 4. Copy `backend/.env.example` to `backend/.env` and fill in both values.
@@ -85,57 +87,54 @@ debug mode is switched off then, so its debugger is never reachable from other d
 
 ## 4. Using it
 
-**Top bar:** survey dropdown, **Survey around me** (a quick 12 × 8 m area),
-**New survey** (your own size + optional floor-plan image), the click mode
-(**Measure / Walk / Place router**), and the **Live / Disconnected** indicator for the
-live stream (it reconnects by itself).
+**Top bar:** survey dropdown, **Survey around me**, **New survey**, and the
+**Live / Disconnected** indicator for the live stream (it reconnects by itself).
+**Tabs:** **Rooms** · **Floor map** · **Networks**.
 
+> **Why you tap your position instead of using GPS.** The laptop can only measure Wi-Fi
+> where it *is*, and it cannot sense where it is indoors: Windows' own location estimate
+> is off by hundreds of metres (±500 m measured on the test laptop), and even phone GPS
+> is off by 5–20 m inside a building, which is bigger than a classroom. So the app asks
+> you instead: a room name, or a rough tap on the map. That's how professional Wi-Fi
+> site surveys work too.
 
-| Mode | A click on the map… |
+### A. Room by room (Rooms tab, the quickest answer)
+
+1. **New survey** → give it a name (e.g. *My college*). Nothing else is needed.
+2. Go to a room, hold the laptop where you normally use it (desk, bench, bed), pick the
+   room (**College**: Classroom, Lab, Library…, **Home**: Bedroom, Kitchen…, **Office**,
+   or type your own, e.g. *Lab 3*) and press **Measure**. It averages 5–30 s of samples
+   and speaks the result.
+3. Measure the same room again to add another spot; the room shows its average, best and worst.
+4. **Results:** every room ranked with a colour bar (marks at −67 and −75 dBm), the verdict
+   (*★ Extender required* / *✓ No extender needed*), the **best room for the extender**, and tips.
+
+### B. Survey around me (Floor map tab, a heatmap around you)
+
+1. **Survey around me** → pick where you are (Classroom, Lab, …) and a **range**: 5, 10, 15,
+   20, 30 or 50 m. You get a square map of that size with **you in the centre**, and
+   the first reading is taken right there.
+2. Walk, stop, and **tap where you are now** on the map (roughly is fine). It measures
+   there for the chosen time, and the heatmap, dead zones and readings grow around you.
+   Grey hatching = not measured yet.
+3. Optional: **Place router** (tap where it is) for the path-loss calibration and the what-if.
+
+| Mode (Floor map) | A tap on the map… |
 |---|---|
-| **Measure** | sets your position. With *Auto-measure* ticked, it measures there straight away for the chosen time (3–30 s, 1 sample per second); otherwise press **Measure here**. |
-| **Walk** | saves a quick **3-sample** reading at once (~3 s). Click-click-click as you walk; the heatmap redraws after each one. |
+| **Measure** | measures there straight away for the chosen time (3–30 s, 1 sample per second). Untick *Auto-measure* to only set the marker and press **Measure here**. |
+| **Walk** | saves a quick **3-sample** reading at once (~3 s). Tap-tap-tap as you walk. |
 | **Place router** | sets the router position (needed for calibration and what-if). |
 
-### The guided, hands-free survey (recommended)
-
-The laptop can't sense where it is indoors: it has no GPS, Windows' location estimate is
-off by kilometres, and even phone GPS is off by 5–20 m indoors. So positions come from
-**10 marked spots**, the same way professional site surveys work. No floor plan is needed.
-
-1. **Line the map up with your room (once per survey).** Stand in a corner and name it
-   (e.g. *door corner*); that corner is the map's top-left. Name the wall running along
-   the map's top edge (e.g. *window wall*). Optionally enter your step length, or let
-   the app work it out: "I walked 8 steps over 6 m" gives 0.75 m. With no tape measure,
-   pace the room size too: steps × step length.
-2. **Mark the floor.** Open *Placement sheet* (or **Print sheet**). Each of the 10 spots
-   is written in your words, e.g. *"From the door corner: 6.0 m (8 steps) along the window
-   wall, then 2.0 m (3 steps) into the room."* Put a numbered paper note on each spot.
-3. **Press ▶ Start hands-free** and pick up the laptop. For each point, the laptop
-   **says** where to go and counts down (walking time: 5–30 s). It then beeps, measures
-   for the chosen time, and announces the result (e.g. *"Point 3: −72 dBm, Fair"*).
-   Then it moves on. Messages are queued, so a result is never cut off by the next
-   instruction, and the walking countdown starts after the directions have been spoken.
-   Press **Space** when you reach a note to measure right away (it works even when a
-   button has focus).
-   **Skip point** handles a spot you can't reach; **Pause** stops it.
-4. If a reading wobbled (standard deviation > 4 dB), it says so and offers **Redo point N**.
-5. After the last point it announces the verdict: *extender required or not*.
-
-The heatmap, dead zones and verdict update after every point.
-
-**Right panel**
-1. **Live signal:** big dBm number, band, SSID, channel and band, and a 60-second graph
-   with dashed lines at −67 and −75. Below −75 dBm the card turns red and shows
-   *"Entering dead zone"*. There's an optional beep (off by default).
-2. **Connection quality:** latency, jitter and packet loss of pings to your router.
-3. **Results:** the extender verdict (★ required / ✓ not needed, with the spot), every
-   dead zone, the healthy/marginal/dead split, and advice. Marked *preliminary* until
-   the 10 guided points are done.
-4. **Path-loss calibration:** n, A and R², plus a scatter of RSSI against distance with the fitted line.
-5. **What-if:** tick *What-if (drag router)* above the map and drag. The map shows the
-   *predicted* coverage with the router there, compared with today.
-6. **Readings:** newest first, with delete, **Export CSV** and **Delete survey**.
+**Side panel (Floor map)**
+1. **Live signal:** big dBm number, band, SSID, channel, and a 60-second graph with dashed
+   lines at −67 and −75. Below −75 dBm the card turns red (*"Entering dead zone"*); optional beep.
+2. **Measure:** time, auto-measure, manual dBm entry.
+3. **Results:** extender verdict and spot, dead zones, healthy/marginal/dead split, *Floor measured %*, advice.
+4. **Connection quality:** latency, jitter and packet loss of pings to your router.
+5. **Path-loss calibration:** n, A and R², plus a scatter of RSSI against distance with the fitted line.
+6. **What-if:** tick *What-if (drag router)* and drag. The map shows the *predicted* coverage
+   with the router there, compared with today.
+7. **Readings:** newest first, with delete, **Export CSV** and **Delete survey**.
 
 **Networks tab:** a live table of nearby networks (yours highlighted), a 2.4 GHz chart
 (each network drawn as a 22 MHz-wide hump) with the recommended channel, and a 5 GHz bar chart.
@@ -151,8 +150,9 @@ below (#E2513C). Everything below −75 is outlined as a dead zone on the map.
 | Reading the signal | `wifi_reader.py` runs the OS tool (`netsh` / `/proc/net/wireless` + `iw` / `system_profiler`) and parses its text. Windows 11 prints the real `Rssi`; otherwise `dBm ≈ Signal% / 2 − 100`. |
 | Live updates | `sampler.py` runs a background thread: 1 reading per second into a 120-sample ring buffer, the nearby-network list every 10 s, and a second thread pinging the router every second. `netsh` only shows Windows' cached network list, so while the Networks tab is open the sampler asks Windows for a real scan (`WlanScan` in wlanapi.dll, via ctypes) and reads the list 4 s later. Scans are not forced otherwise, because they briefly take the radio off-channel and would spoil the ping numbers during a survey. `/api/stream` pushes each sample to every open dashboard with **Server-Sent Events** (one long HTTP response the browser keeps open). |
 | Measure / Walk | The endpoint waits for N *new* samples from the sampler and saves their mean, standard deviation, min and max. Averaging smooths out fading (the signal's natural second-to-second wobble). |
-| Heatmap | **IDW**: every 0.25 m cell (coarser on floors over ~37 m, max ~150 cells per side) gets a weighted average of the readings, `value = Σ wᵢ·RSSIᵢ / Σ wᵢ` with `wᵢ = 1/dᵢ²`, so nearer readings count more. Cells farther than `max(3 m, √(area/10))` from every reading are **not measured yet** (grey hatching) instead of guessed, so the first reading does not colour the whole floor. Once the 10 guided points are done the whole floor is covered. Percentages are of the measured part; *Floor measured* shows how much that is. |
+| Heatmap | **IDW**: every 0.25 m cell (coarser on floors over ~37 m, max ~150 cells per side) gets a weighted average of the readings, `value = Σ wᵢ·RSSIᵢ / Σ wᵢ` with `wᵢ = 1/dᵢ²`, so nearer readings count more. Cells farther than `max(3 m, √(area/10))` from every reading are **not measured yet** (grey hatching) instead of guessed, so the first reading does not colour the whole floor. Readings spread over the area (about one every few metres) cover it all. Percentages are of the measured part; *Floor measured* shows how much that is. |
 | Dead zones | Measured cells below −75 dBm are grouped with a **BFS flood fill** (4 neighbours). Groups under 0.5 m² are ignored. Each zone gets its area, centre and worst value. |
+| Room-by-room | Readings are grouped by room name. A room's status comes from its average: good ≥ −67, fair −75…−67, dead < −75. An extender is needed when any room is dead; it goes in the **weakest room that still has good signal**, the edge of good coverage and the closest strong spot to the dead rooms. (The app doesn't know how rooms connect, so it also says to pick the side nearest the dead room; if only the router's room is good, it says to measure on the way and use the last spot that's still ≥ −67.) |
 | Extender spot | The cell at −67 dBm or better nearest to the centre of the biggest dead zone: an extender there still gets a strong signal but is as close as possible to the gap. |
 | Calibration | Log-distance model `RSSI = A − 10·n·log₁₀(d)`. With `x = −10·log₁₀(d)` it is a straight line `RSSI = A + n·x`, fitted by **least squares** (numpy). **R² = 1 − SS_res/SS_tot**. A reading 8+ dB below the line is flagged *obstructed* (orange ring). n = 2 in free space and about 3 in homes; higher means more absorption. |
 | What-if | `prediction = model(distance to new router) + IDW(residuals)`. The residuals keep what the model can't see (walls), assuming walls stay put. It's an estimate, so re-survey after moving the router. |
@@ -180,6 +180,9 @@ Newer Windows 11 builds hide Wi-Fi details from `netsh` unless Location is allow
 | POST | `/api/surveys/<id>/measure` | `{x, y, samples}`: average 3–30 fresh samples |
 | POST | `/api/surveys/<id>/walk` | `{x, y}`: quick 3-sample reading |
 | POST | `/api/surveys/<id>/readings` | `{x, y, rssi}`: manual entry |
+| POST | `/api/surveys/<id>/rooms/measure` | `{room, samples}`: room-by-room reading |
+| GET | `/api/surveys/<id>/rooms` | per-room signal, extender verdict + room, advice |
+| DELETE | `/api/surveys/<id>/rooms/<name>` | delete one room's readings |
 | DELETE | `/api/readings/<id>` | delete a reading |
 | GET | `/api/surveys/<id>/map` | heatmap grid, dead zones, extender, stats, advice |
 | GET | `/api/surveys/<id>/calibration` | A, n, R², fitted curve, residuals |
@@ -202,7 +205,7 @@ Errors are always JSON: `{"error": "..."}` with status 400/404/409/503.
 | Supabase "permission denied" / empty lists | Use the secret / service_role key, not the anon key. |
 | RSSI barely changes | Windows refreshes it every few seconds and it is stable when you stand still. Use Measure with 10 s or more per spot. |
 | Calibration says "need 5 readings" | Place the router and take 5+ readings at different distances (0.5 m or more from it). |
-| Banner "Your Supabase tables are missing the newest columns" | Re-run `backend/schema.sql` in the Supabase SQL Editor and restart `app.py`. Until then room directions are saved in `backend/local_setup.json` on this laptop, and readings don't store channel/band. |
-| No voice during hands-free | Tick *Voice* in the Guide panel and check the laptop's volume. Speech uses the browser's built-in voices. |
+| Banner "Your Supabase tables are missing the newest columns" | Re-run `backend/schema.sql` in the Supabase SQL Editor and restart `app.py`. Until then everything still works (a reading's room is kept in the `method` column), but readings don't store channel/band. |
+| No spoken result | Tick *Speak the result* on the Rooms tab and check the laptop's volume. Speech uses the browser's built-in voices. |
 | Phone can't open the dashboard | Use `npm run dev:lan`, the same Wi-Fi, and allow Node.js through the Windows Firewall (private networks). |
 | Linux: no reading / no scan | Check `/proc/net/wireless`, and install `iw` / `wireless-tools` and NetworkManager (`nmcli`). |

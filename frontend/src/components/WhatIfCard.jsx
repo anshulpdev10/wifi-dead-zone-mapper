@@ -2,9 +2,9 @@
 // Drag on the map to move a proposed router; the backend predicts the new
 // heatmap from the calibrated path-loss model plus each reading's residual
 // (GET /api/surveys/<id>/whatif?x=&y=). This card compares it with today.
-import { describePosition } from '../guide.js'
+import { describePosition } from '../position.js'
 
-export default function WhatIfCard({ calibration, whatIfMode, whatIf, current, setup, onToggle, onApply }) {
+export default function WhatIfCard({ calibration, whatIfMode, whatIf, current, onToggle, onApply }) {
   const ready = calibration?.ready
   const p = whatIf?.result?.stats
   const now = current?.stats
@@ -30,7 +30,7 @@ export default function WhatIfCard({ calibration, whatIfMode, whatIf, current, s
           {whatIf?.error && <p className="error small" role="alert">{whatIf.error}</p>}
           {p && (
             <>
-              <p className="small">Proposed router: <strong>{describePosition(whatIf.router, setup)}</strong></p>
+              <p className="small">Proposed router: <strong>{describePosition(whatIf.router)}</strong></p>
               <table className="compare">
                 <thead><tr><th></th><th>Now</th><th>Predicted</th><th>Change</th></tr></thead>
                 <tbody>

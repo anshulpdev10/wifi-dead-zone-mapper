@@ -1,10 +1,10 @@
 // StatsPanel.jsx - results from GET /api/surveys/<id>/map:
 // extender verdict, dead zones (located in metres from the walls),
-// coverage statistics and advice. Marked "preliminary" until the guided
-// 10-point survey is finished.
-import { describePosition } from '../guide.js'
+// coverage statistics and advice. Marked "preliminary" while less than
+// 90 % of the floor has been measured.
+import { describePosition } from '../position.js'
 
-export default function StatsPanel({ map, guideComplete, setup }) {
+export default function StatsPanel({ map }) {
   if (!map) return null
 
   // No readings yet, or only a preliminary heatmap (fewer than 3 readings).
@@ -22,7 +22,7 @@ export default function StatsPanel({ map, guideComplete, setup }) {
   return (
     <section className="card" aria-labelledby="stats-title">
       <h2 id="stats-title">
-        Results {!guideComplete && <span className="muted">(preliminary – finish the 10 points)</span>}
+        Results {s.measured_pct < 90 && <span className="muted">(preliminary – measure the hatched areas)</span>}
       </h2>
 
       {/* 1. The headline answer: is an extender required?
@@ -31,7 +31,7 @@ export default function StatsPanel({ map, guideComplete, setup }) {
         <strong>{ext.needed ? '★ Extender required' : '✓ No extender needed'}</strong>
         <span>{ext.reason}</span>
         {map.suggestion && (
-          <span className="small">Extender spot: {describePosition(map.suggestion, setup)} ({map.suggestion.rssi} dBm there)</span>
+          <span className="small">Extender spot: {describePosition(map.suggestion)} ({map.suggestion.rssi} dBm there)</span>
         )}
       </div>}
 
@@ -42,7 +42,7 @@ export default function StatsPanel({ map, guideComplete, setup }) {
           <ol className="zones">
             {map.regions.map((reg, i) => (
               <li key={i}>
-                <strong>{reg.area_m2} m²</strong> around {describePosition(reg.center, setup)} · worst {reg.worst_dbm} dBm
+                <strong>{reg.area_m2} m²</strong> around {describePosition(reg.center)} · worst {reg.worst_dbm} dBm
               </li>
             ))}
           </ol>

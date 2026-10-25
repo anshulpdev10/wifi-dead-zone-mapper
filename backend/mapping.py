@@ -68,9 +68,9 @@ def default_cell(width, height):
 
 
 def reach_for(width, height):
-    """How far around a reading the map is filled in. With the 10 guided points
-    spread evenly, every cell is within this distance of a point, so a finished
-    survey has no gaps, while a single reading only colours the area around it."""
+    """How far around a reading the map is filled in. With ~10 readings spread
+    evenly, every cell is within this distance of one, so a finished survey has
+    no gaps, while a single reading only colours the area around it."""
     return max(MIN_REACH_M, math.sqrt(width * height / 10))
 
 

@@ -5,21 +5,19 @@
 //   1. floor-plan image (optional)      5. measured points + dBm labels
 //   2. heatmap cells coloured by band   6. router (triangle)
 //   3. 1 m grid                         7. suggested extender (star)
-//   4. dashed outline of dead cells     8. guided-survey targets (numbered circles)
-//                                       9. live-signal ring + crosshair at my position
-//                                      10. metre rulers along the top and left edges
+//   4. dashed outline of dead cells     8. live-signal ring + crosshair at my position
+//                                       9. metre rulers along the top and left edges
 // (0, 0) is the TOP-LEFT corner: x = metres from the left wall, y = from the top wall.
 //
 // Keyboard: arrow keys move the crosshair 0.5 m (Shift = 0.1 m),
 // Enter measures there (or places the router in "Place router" mode).
 import { useEffect, useRef, useState } from 'react'
 import { bandFor, DEAD_DBM } from '../bands.js'
-import { describePosition } from '../guide.js'
+import { describePosition } from '../position.js'
 
 const HEATMAP_ALPHA = 0.55   // see-through so the plan image stays visible
-const GUIDE_COLOR = '#1f6feb'
 
-export default function FloorMap({ survey, readings, map, showHeatmap, mode, selected, live, guide,
+export default function FloorMap({ survey, readings, map, showHeatmap, mode, selected, live,
   obstructedIds, lastAddedId, whatIfMode, whatIf, onWhatIf, onSelect, onPick }) {
   const wrapRef = useRef(null)
   const canvasRef = useRef(null)
@@ -205,34 +203,7 @@ export default function FloorMap({ survey, readings, map, showHeatmap, mode, sel
       ctx.stroke()
     }
 
-    // 8. Guided-survey targets: the NEXT one is filled blue, the rest are
-    //    dashed outlines, skipped ones grey; finished ones are hidden (the
-    //    measured dot is already there).
-    if (guide) {
-      ctx.font = '700 12px system-ui, sans-serif'
-      ctx.textAlign = 'center'
-      ctx.textBaseline = 'middle'
-      guide.points.forEach((p) => {
-        if (p.done) return
-        const x = px(p.x), y = px(p.y)
-        const isNext = guide.next?.n === p.n
-        const color = p.skipped ? '#9aa4b2' : GUIDE_COLOR
-        ctx.beginPath()
-        ctx.arc(x, y, isNext ? 14 : 11, 0, Math.PI * 2)
-        ctx.fillStyle = isNext ? color : 'rgba(255,255,255,0.85)'
-        ctx.fill()
-        ctx.setLineDash(isNext ? [] : [4, 3])
-        ctx.lineWidth = 2
-        ctx.strokeStyle = color
-        ctx.stroke()
-        ctx.setLineDash([])
-        ctx.fillStyle = isNext ? '#ffffff' : color
-        ctx.fillText(String(p.n), x, y + 0.5)
-      })
-      ctx.textBaseline = 'alphabetic'
-    }
-
-    // 9. My position: a 1 m ring coloured by the LIVE signal, then the crosshair
+    // 8. My position: a 1 m ring coloured by the LIVE signal, then the crosshair
     if (selected) {
       const x = px(selected.x), y = px(selected.y)
       if (live != null) {
@@ -267,7 +238,7 @@ export default function FloorMap({ survey, readings, map, showHeatmap, mode, sel
       ctx.stroke()
     }
 
-    // 10. Metre rulers: tick + label every 1 m (2 m / 5 m on small screens)
+    // 9. Metre rulers: tick + label every 1 m (2 m / 5 m on small screens)
     const step = scale >= 45 ? 1 : scale >= 20 ? 2 : 5
     ctx.font = '600 10px system-ui, sans-serif'
     ctx.fillStyle = '#111827'
@@ -285,26 +256,14 @@ export default function FloorMap({ survey, readings, map, showHeatmap, mode, sel
     }
     label('0', 3, 11)
 
-    // Room directions: show which real corner / wall the map's top-left / top edge is.
-    if (survey.setup) {
-      ctx.font = '700 11px system-ui, sans-serif'
-      ctx.fillStyle = '#1f6feb'
-      ctx.textAlign = 'center'
-      label(`▲ ${survey.setup.wall}`, cssW / 2, 30)
-      ctx.textAlign = 'left'
-      ctx.fillStyle = '#ea580c'
-      label(`● ${survey.setup.corner}`, 8, 28)
-      ctx.fillStyle = '#111827'
-    }
-
-    // 11. What-if badge so a prediction is never mistaken for measured data
+    // 10. What-if badge so a prediction is never mistaken for measured data
     if (whatIf?.result) {
       ctx.font = '700 12px system-ui, sans-serif'
       ctx.textAlign = 'right'
       ctx.fillStyle = '#ea580c'
       label('PREDICTION – router moved', cssW - 8, cssH - 10)
     }
-  }, [survey, readings, map, showHeatmap, selected, live, guide, obstructedIds, whatIf, planImage, scale, cssW, cssH])
+  }, [survey, readings, map, showHeatmap, selected, live, obstructedIds, whatIf, planImage, scale, cssW, cssH])
 
   // The newest point pulses once (CSS animation on a small overlay circle).
   const newest = readings.find((r) => r.id === lastAddedId)
@@ -367,8 +326,8 @@ export default function FloorMap({ survey, readings, map, showHeatmap, mode, sel
       )}
       {/* Where am I? Live readout of the pointer / marker position in metres */}
       <p className="position-readout" aria-live="polite">
-        {hover ? <>Pointer: <strong>{describePosition(hover, survey.setup)}</strong></>
-          : selected ? <>Marker: <strong>{describePosition(selected, survey.setup)}</strong></>
+        {hover ? <>Pointer: <strong>{describePosition(hover)}</strong></>
+          : selected ? <>Marker: <strong>{describePosition(selected)}</strong></>
           : 'Move the mouse over the map to see the distance from the walls.'}
       </p>
     </div>

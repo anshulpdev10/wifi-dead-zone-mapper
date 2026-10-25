@@ -177,7 +177,7 @@ th { position: sticky; top: 0; background: var(--card); color: var(--muted); fon
 
 /* ---------------------------------------------------------------- new survey form */
 .new-survey { width: 100%; max-width: 480px; display: flex; flex-direction: column; gap: 6px; }
-.new-survey input:not([type='file']) { width: 100%; }
+.new-survey input:not([type='file']):not([type='radio']) { width: 100%; }
 .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 
 /* ---------------------------------------------------------------- responsive */
@@ -264,29 +264,37 @@ tr.mine td { background: #eef4ff; font-weight: 600; }
 .up { color: #1e7b45; font-weight: 700; }
 .down { color: #b42318; font-weight: 700; }
 
-/* ---------------------------------------------------------------- room directions + hands-free */
-.setup-form { display: flex; flex-direction: column; gap: 6px; }
-.setup-form input:not([type='checkbox']) { width: 100%; }
-.row.tight { gap: 6px; margin-top: 6px; }
-.row.tight input[type='number'] { width: 64px; }
-.row.tight #su-step { width: 80px; }
-.setup-diagram { width: 100%; max-width: 320px; height: auto; margin: 4px 0; }
-.diagram-text { font-size: 10px; fill: #1b1f24; }
-.diagram-text.strong { font-weight: 700; fill: #1f6feb; }
-.room-line { margin: 0 0 8px; }
-button.link.inline { padding: 0; display: inline; }
+/* ---------------------------------------------------------------- rooms + survey around me */
+.row.tight { gap: 6px; margin-top: 8px; }
+.rooms { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+button.big { padding: 10px 18px; font-weight: 700; }
 
-.auto-status { border-radius: 10px; padding: 10px 12px; margin-bottom: 4px; background: #eef4ff; border: 2px solid #9cc1fb; }
-.auto-status.measure { background: #fff4d6; border-color: #f2c94c; }
-.auto-status strong { font-size: 1.1rem; margin-left: 6px; }
-.auto-status p { margin: 6px 0 0; }
-.countdown { float: right; font-size: 1.6rem; font-weight: 800; font-variant-numeric: tabular-nums; color: var(--primary); }
-kbd { border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; font-size: 0.8rem; background: #fff; }
-.last-result { margin: 8px 0 0; }
-.last-result.unstable { color: #a15c00; }
+.place-picker { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.small-seg button { padding: 4px 10px; font-size: 0.8rem; }
+.small-seg button + button { border-left: none; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chips button { border-radius: 999px; padding: 6px 12px; }
+.chips button[aria-pressed='true'] { background: var(--primary); border-color: var(--primary); color: #fff; }
+.chip-done { color: #1e7b45; font-weight: 700; }
+.chips button[aria-pressed='true'] .chip-done { color: #fff; }
 
-.placement { margin-top: 10px; }
-.placement summary { cursor: pointer; font-weight: 600; font-size: 0.9rem; }
-.sheet-list { padding-left: 22px; font-size: 0.88rem; }
-.sheet-list li { margin-bottom: 4px; }
-.sheet-list li.done { color: var(--muted); }
+.room-list { list-style: none; padding: 0; margin: 12px 0 6px; display: flex; flex-direction: column; gap: 10px; }
+.room-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.room-head strong { font-size: 1rem; }
+.room-head .icon { margin-left: auto; }
+.room-dbm { font-weight: 700; font-variant-numeric: tabular-nums; }
+.room-list li.dead .room-head strong { color: #b42318; }
+.ext-tag { background: #7c3aed; color: #fff; }
+.room-bar { position: relative; height: 12px; border-radius: 999px; background: #e7ebf0; margin: 4px 0 2px; overflow: hidden; }
+.room-bar div { height: 100%; border-radius: 999px; transition: width 0.4s; }
+.room-bar .mark { position: absolute; top: 0; bottom: 0; width: 2px; background: rgba(27, 31, 36, 0.45); }
+.room-bar .mark.dead { background: #b42318; }
+
+.range-options { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; }
+.range-option { display: flex; align-items: baseline; gap: 6px; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; cursor: pointer; }
+.range-option.on { border-color: var(--primary); background: #eef4ff; }
+.floor-options { margin-top: 6px; }
+.floor-options summary { cursor: pointer; font-weight: 600; font-size: 0.9rem; margin-bottom: 6px; }
+.new-survey { max-width: 640px; }
+.new-survey h3 { margin-top: 10px; }
+.new-survey .chips button, .new-survey .small-seg button { width: auto; }

@@ -9,7 +9,8 @@ export const BANDS = [
   { name: 'Dead zone', min: -Infinity, color: '#E2513C' },
 ]
 
-// Cells below this are outlined as dead zone on the map (matches mapping.py).
+// Thresholds (match mapping.py): >= GOOD is healthy, below DEAD is a dead zone.
+export const GOOD_DBM = -67
 export const DEAD_DBM = -75
 
 export function bandFor(rssi) {

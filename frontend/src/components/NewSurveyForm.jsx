@@ -1,6 +1,7 @@
-// NewSurveyForm.jsx - create a survey: name, floor size in metres and an
-// optional floor-plan image. The image is shrunk in the browser (max 1400 px,
-// JPEG) before upload so the database row stays small.
+// NewSurveyForm.jsx - create a survey. Only a name is needed for the
+// room-by-room survey; floor size and a floor-plan image are optional (for the
+// Floor map tab). The image is shrunk in the browser (max 1400 px, JPEG)
+// before upload so the database row stays small.
 import { useState } from 'react'
 
 const MAX_SIDE = 1400
@@ -54,24 +55,27 @@ export default function NewSurveyForm({ onCreate, onCancel, canCancel }) {
 
       <label htmlFor="sv-name">Name</label>
       <input id="sv-name" required maxLength={80} value={name} autoFocus
-        placeholder="e.g. Ground floor, Hostel block B" onChange={(e) => setName(e.target.value)} />
+        placeholder="e.g. My flat, Hostel block B" onChange={(e) => setName(e.target.value)} />
+      <p className="muted small">That's all you need: you'll measure room by room next.</p>
 
-      <div className="two-col">
-        <div>
-          <label htmlFor="sv-width">Width (m)</label>
-          <input id="sv-width" type="number" min="1" max="200" step="0.1" required
-            value={width} onChange={(e) => setWidth(e.target.value)} />
+      <details className="floor-options">
+        <summary>Floor map (optional, only if you have a floor plan)</summary>
+        <div className="two-col">
+          <div>
+            <label htmlFor="sv-width">Width (m)</label>
+            <input id="sv-width" type="number" min="1" max="200" step="0.1" required
+              value={width} onChange={(e) => setWidth(e.target.value)} />
+          </div>
+          <div>
+            <label htmlFor="sv-height">Height (m)</label>
+            <input id="sv-height" type="number" min="1" max="200" step="0.1" required
+              value={height} onChange={(e) => setHeight(e.target.value)} />
+          </div>
         </div>
-        <div>
-          <label htmlFor="sv-height">Height (m)</label>
-          <input id="sv-height" type="number" min="1" max="200" step="0.1" required
-            value={height} onChange={(e) => setHeight(e.target.value)} />
-        </div>
-      </div>
-
-      <label htmlFor="sv-plan">Floor-plan image (optional)</label>
-      <input id="sv-plan" type="file" accept="image/*" onChange={(e) => setFile(e.target.files[0] || null)} />
-      <p className="muted small">Measure the real floor size: the image is stretched to width × height.</p>
+        <label htmlFor="sv-plan">Floor-plan image</label>
+        <input id="sv-plan" type="file" accept="image/*" onChange={(e) => setFile(e.target.files[0] || null)} />
+        <p className="muted small">Used by the Floor map tab. The image is stretched to width × height.</p>
+      </details>
 
       {error && <p className="error" role="alert">{error}</p>}
 
