@@ -10,6 +10,7 @@ care WHERE data is kept:
 Both classes have exactly the same methods (same "interface").
 """
 
+import json
 import os
 import time
 import uuid
@@ -85,6 +86,30 @@ class MemoryStore:
         return self.readings.pop(reading_id, None) is not None
 
 
+class LocalSetupFile:
+    """survey id -> room directions, saved in backend/local_setup.json.
+    Only used while the Supabase 'setup' column is missing (old schema)."""
+    PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "local_setup.json")
+
+    def __init__(self):
+        try:
+            with open(self.PATH, encoding="utf-8") as f:
+                self.data = json.load(f)
+        except (OSError, ValueError):
+            self.data = {}
+
+    def get(self, survey_id):
+        return self.data.get(survey_id)
+
+    def set(self, survey_id, setup):
+        if setup is None:
+            self.data.pop(survey_id, None)
+        else:
+            self.data[survey_id] = setup
+        with open(self.PATH, "w", encoding="utf-8") as f:
+            json.dump(self.data, f, indent=2)
+
+
 class SupabaseStore:
     mode = "supabase"
 
@@ -105,11 +130,20 @@ class SupabaseStore:
             self.has_setup = True
         except Exception:
             self.has_setup = False
+        # Until schema.sql is re-run, room directions are kept in a small local
+        # JSON file instead, so the guided survey still works.
+        self.local_setup = LocalSetupFile() if not self.has_setup else None
 
-    def _check_setup(self, data):
-        if "setup" in data and not self.has_setup:
-            raise SchemaOutdated("Saving room directions needs the new 'setup' column - "
-                                 "re-run backend/schema.sql in the Supabase SQL Editor.")
+    def _split_setup(self, data):
+        """Without the 'setup' column, take setup out of the row (kept locally)."""
+        if self.has_setup or "setup" not in data:
+            return data, False, None
+        return {k: v for k, v in data.items() if k != "setup"}, True, data["setup"]
+
+    def _with_setup(self, survey):
+        if survey is not None and self.local_setup is not None:
+            survey = {**survey, "setup": self.local_setup.get(survey["id"])}
+        return survey
 
     def _table(self, name):
         return self.client.table(name)
@@ -136,25 +170,36 @@ class SupabaseStore:
         if not _is_uuid(survey_id):          # Postgres would reject a bad uuid
             return None
         rows = self._run(self._table("surveys").select("*").eq("id", survey_id))
-        return rows[0] if rows else None
+        return self._with_setup(rows[0]) if rows else None
 
     def create_survey(self, data):
-        if not self.has_setup and data.get("setup") is None:
-            data = {k: v for k, v in data.items() if k != "setup"}
-        self._check_setup(data)
-        return self._run(self._table("surveys").insert(data), retry=False)[0]
+        data, has_local, setup = self._split_setup(data)
+        survey = self._run(self._table("surveys").insert(data), retry=False)[0]
+        if has_local:
+            self.local_setup.set(survey["id"], setup)
+        return self._with_setup(survey)
 
     def update_survey(self, survey_id, fields):
         if not _is_uuid(survey_id):
             return None
-        self._check_setup(fields)
-        rows = self._run(self._table("surveys").update(fields).eq("id", survey_id))
-        return rows[0] if rows else None
+        fields, has_local, setup = self._split_setup(fields)
+        if fields:
+            rows = self._run(self._table("surveys").update(fields).eq("id", survey_id))
+        else:                                   # only the (local) setup changed
+            rows = self._run(self._table("surveys").select("*").eq("id", survey_id))
+        if not rows:
+            return None
+        if has_local:
+            self.local_setup.set(survey_id, setup)
+        return self._with_setup(rows[0])
 
     def delete_survey(self, survey_id):
         if not _is_uuid(survey_id):
             return False
-        return bool(self._run(self._table("surveys").delete().eq("id", survey_id)))
+        deleted = bool(self._run(self._table("surveys").delete().eq("id", survey_id)))
+        if deleted and self.local_setup is not None:
+            self.local_setup.set(survey_id, None)
+        return deleted
 
     # -- readings
     def list_readings(self, survey_id):
@@ -186,7 +231,8 @@ def connect():
         store = SupabaseStore(url, key)
         if store.missing_columns or not store.has_setup:
             return store, (f"Connected to Supabase ({url}), but the tables are missing the newest "
-                           "columns (channel/band/mode, setup) - re-run schema.sql to add them.")
+                           "columns (channel/band/mode, setup) - re-run schema.sql to add them. "
+                           "Until then room directions are kept in backend/local_setup.json.")
         return store, f"Connected to Supabase ({url})."
     except Exception as exc:   # bad key, no internet, tables missing...
         return MemoryStore(), f"Supabase unreachable ({exc}) - using in-memory storage."

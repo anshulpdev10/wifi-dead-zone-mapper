@@ -394,6 +394,15 @@ export default function App() {
           </span>
         </div>
       )}
+      {health?.db === 'supabase' && health.schema_ok === false && (
+        <div className="banner warn" role="status">
+          <span>
+            Your Supabase tables are missing the newest columns. Open Supabase → <strong>SQL Editor</strong>, paste
+            all of <code>backend/schema.sql</code> and press Run, then restart <code>app.py</code>. (Until then room
+            directions are saved on this laptop and the channel/band of each reading is not stored.)
+          </span>
+        </div>
+      )}
       {notice && (
         <div className={`banner ${notice.kind}`} role={notice.kind === 'error' ? 'alert' : 'status'}>
           <span>{notice.text}</span>

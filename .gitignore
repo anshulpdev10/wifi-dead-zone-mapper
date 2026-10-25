@@ -6,6 +6,12 @@ __pycache__/
 # Secrets - never commit Supabase keys
 .env
 
+# Room directions kept locally while the Supabase 'setup' column is missing
+backend/local_setup.json
+
+# Work summary for the owner (kept local)
+WORK_SUMMARY.pdf
+
 # Node / Vite
 frontend/node_modules/
 frontend/dist/

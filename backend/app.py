@@ -195,7 +195,8 @@ def validate_setup(setup):
 # ------------------------------------------------------------------ status + live data
 @app.get("/api/health")
 def health():
-    return jsonify({"ok": True, "db": store.mode, "db_message": db_message,
+    schema_ok = not getattr(store, "missing_columns", False) and getattr(store, "has_setup", True)
+    return jsonify({"ok": True, "db": store.mode, "db_message": db_message, "schema_ok": schema_ok,
                     "platform": platform.system(), "gateway": sampler.gateway})
 
 
