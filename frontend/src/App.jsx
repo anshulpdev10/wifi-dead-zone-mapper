@@ -100,7 +100,7 @@ export default function App() {
       const ext = mapRef.current?.extender
       const text = 'Survey complete. ' + (ext ? (ext.needed ? 'An extender is required. ' : 'No extender is needed. ') + ext.reason : '')
       showOk(text)
-      if (voice) say(text.replace('m²', 'square metres'))
+      if (voice) say(text)
     },
   })
 

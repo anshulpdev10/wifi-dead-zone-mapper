@@ -1,9 +1,10 @@
 // useAutoSurvey.js - hands-free guided survey (a small state machine).
 //
-//   idle ──(next target)──> walk ──(countdown ends / Space)──> measure ──> idle ...
+//   idle ──(next target)──> announce ──(spoken)──> walk ──(countdown ends / Space)──> measure ──> idle ...
 //
-// walk    : the laptop says where to go ("Point 3. From the door corner: ...")
-//           and counts down while you walk there.
+// announce: the laptop says where to go ("Point 3. From the door corner: ...").
+// walk    : counts down while you walk there (starts AFTER the instruction was
+//           spoken, so the walking time is not eaten by the speech).
 // measure : beep, the backend averages N fresh samples, the result is spoken.
 //           A reading that wobbled a lot (std > 4 dB) gets a spoken warning.
 // When no target is left, it stops and onComplete() announces the verdict.
@@ -16,17 +17,20 @@ const UNSTABLE_STD_DB = 4
 
 export function useAutoSurvey({ guide, setup, walkSeconds, voice, measurePoint, onSkip, onComplete }) {
   const [running, setRunning] = useState(false)
-  const [phase, setPhase] = useState('idle')          // 'idle' | 'walk' | 'measure'
+  const [phase, setPhase] = useState('idle')          // 'idle' | 'announce' | 'walk' | 'measure'
   const [countdown, setCountdown] = useState(0)
   const [target, setTarget] = useState(null)
   const [last, setLast] = useState(null)              // {n, reading, unstable}
-  const speak = (text) => voice && say(text)
+  const speak = (text) => (voice ? say(text) : Promise.resolve())
 
   // Keep the latest values for the async steps below.
   const live = useRef({})
   live.current = { running, target, measurePoint, onComplete }
+  // Bumped on start / pause / skip, so a pending announcement that finishes
+  // later knows it is out of date and does not start a countdown.
+  const runToken = useRef(0)
 
-  // idle -> walk: pick the next target and announce it.
+  // idle -> announce -> walk: pick the next target, say where it is, then count down.
   useEffect(() => {
     if (!running || phase !== 'idle' || !guide) return
     if (!guide.next) {
@@ -35,10 +39,13 @@ export function useAutoSurvey({ guide, setup, walkSeconds, voice, measurePoint, 
       live.current.onComplete?.()
       return
     }
+    const token = runToken.current
     setTarget(guide.next)
     setCountdown(walkSeconds)
-    setPhase('walk')
-    speak(`Point ${guide.next.n}. ${directions(guide.next, setup)}`)
+    setPhase('announce')
+    speak(`Point ${guide.next.n}. ${directions(guide.next, setup)}`).then(() => {
+      if (runToken.current === token) setPhase((p) => (p === 'announce' ? 'walk' : p))
+    })
   }, [running, phase, guide])
 
   // walk: count down once per second, then measure.
@@ -56,6 +63,8 @@ export function useAutoSurvey({ guide, setup, walkSeconds, voice, measurePoint, 
     const point = live.current.target
     if (!point || measuring.current) return
     measuring.current = true
+    runToken.current += 1                               // a pending announcement must not restart the walk
+    stopSpeaking()
     setPhase('measure')
     beep(880, 0.3)
     const reading = await live.current.measurePoint({ x: point.x, y: point.y })
@@ -75,26 +84,31 @@ export function useAutoSurvey({ guide, setup, walkSeconds, voice, measurePoint, 
 
   function start() {
     unlockAudio()                                       // allowed: called from a click
+    stopSpeaking()
+    runToken.current += 1
     setLast(null)
     setPhase('idle')
     setRunning(true)
   }
 
   function pause() {
+    runToken.current += 1
     setRunning(false)
-    if (phase === 'walk') setPhase('idle')             // a running measurement finishes by itself
+    if (phase === 'walk' || phase === 'announce') setPhase('idle')   // a running measurement finishes by itself
     stopSpeaking()
   }
 
   // Space: "I'm here" - measure now instead of waiting for the countdown.
   function measureNow() {
-    if (running && phase === 'walk') startMeasure()
+    if (running && (phase === 'walk' || phase === 'announce')) startMeasure()
   }
 
   function skip() {
-    if (!target) return
+    if (!target || phase === 'measure') return
+    runToken.current += 1
+    stopSpeaking()
     onSkip(target.n)
-    if (phase === 'walk') setPhase('idle')
+    setPhase('idle')
   }
 
   return { running, phase, countdown, target, last, start, pause, measureNow, skip }

@@ -74,11 +74,13 @@ export default function GuidePanel({ guide, setup, auto, measuring, samples, wal
           {auto.running && auto.target ? (
             <div className={`auto-status ${auto.phase}`} role="status" aria-live="assertive">
               <span className="badge">{auto.target.n}</span>
+              {auto.phase === 'announce' && <strong>Point {auto.target.n} – listen for directions</strong>}
               {auto.phase === 'walk' && <><strong>Walk to point {auto.target.n}</strong>
                 <span className="countdown">{auto.countdown} s</span></>}
               {auto.phase === 'measure' && <strong>Measuring point {auto.target.n} – hold still…</strong>}
               <p className="small">{directions(auto.target, setup)}</p>
-              {auto.phase === 'walk' && <p className="muted small">Press <kbd>Space</kbd> when you are there to measure now.</p>}
+              {(auto.phase === 'walk' || auto.phase === 'announce') &&
+                <p className="muted small">Press <kbd>Space</kbd> when you are there to measure now.</p>}
             </div>
           ) : (
             <p className="guide-target">

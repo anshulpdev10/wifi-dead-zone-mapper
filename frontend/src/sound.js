@@ -1,5 +1,7 @@
 // sound.js - the laptop's voice and beeps, so the survey can run hands-free.
-//   say(text) : text-to-speech with the browser's built-in speechSynthesis
+//   say(text) : text-to-speech with the browser's built-in speechSynthesis.
+//               Messages are QUEUED, so a result ("Point 3: -72 dBm") is not cut
+//               off by the next instruction. stopSpeaking() clears the queue.
 //   beep()    : short tone with the Web Audio API (no sound files needed)
 
 let audio = null
@@ -23,12 +25,22 @@ export function beep(freq = 880, seconds = 0.25) {
   osc.stop(audio.currentTime + seconds)
 }
 
+// Speak text after anything already queued. Returns a promise that resolves
+// when this message has been spoken (or straight away if speech is unavailable).
+// A timeout fallback resolves it even if the browser never fires "end".
 export function say(text) {
-  if (!('speechSynthesis' in window)) return
-  window.speechSynthesis.cancel()                     // newest message wins
-  const utterance = new SpeechSynthesisUtterance(text.replace(/−/g, 'minus ').replace(/-(\d)/g, 'minus $1'))
+  if (!('speechSynthesis' in window)) return Promise.resolve()
+  const spoken = text.replace(/m²/g, ' square metres').replace(/−/g, 'minus ').replace(/-(\d)/g, 'minus $1')
+  const utterance = new SpeechSynthesisUtterance(spoken)
   utterance.rate = 1.05
-  window.speechSynthesis.speak(utterance)
+  return new Promise((resolve) => {
+    const words = spoken.split(/\s+/).length
+    const fallback = setTimeout(resolve, 2000 + words * 600)
+    const done = () => { clearTimeout(fallback); resolve() }
+    utterance.onend = done
+    utterance.onerror = done
+    window.speechSynthesis.speak(utterance)
+  })
 }
 
 export function stopSpeaking() {
