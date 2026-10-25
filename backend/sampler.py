@@ -23,11 +23,12 @@ import threading
 import time
 from collections import deque
 
-from wifi_reader import read_rssi, scan_networks
+from wifi_reader import read_rssi, scan_networks, trigger_scan
 
 HISTORY_SIZE = 120     # samples kept (2 minutes at 1 per second)
 PING_WINDOW = 30       # pings used for jitter / packet loss
 SCAN_EVERY_S = 10      # seconds between network scans
+SCAN_SETTLE_S = 4      # after asking Windows for a fresh scan, wait this long before reading it
 DEAD_DBM = -75         # below this the stream raises a dead-zone alert
 
 
@@ -93,6 +94,7 @@ class Sampler:
         self.pings = deque(maxlen=PING_WINDOW)
         self.count = 0                               # total samples ever taken
         self.networks, self.networks_time, self.networks_error = [], None, None
+        self.networks_wanted_until = 0.0             # see want_networks()
         self.gateway = None
         self.new_sample = threading.Condition()      # wakes up threads waiting for samples
         self.listeners = []                          # one queue per open /api/stream
@@ -106,12 +108,17 @@ class Sampler:
         threading.Thread(target=self._sample_loop, name="sampler", daemon=True).start()
         threading.Thread(target=self._ping_loop, name="pinger", daemon=True).start()
 
-    # -- thread 1: RSSI every second, network scan every 10 s
+    # -- thread 1: RSSI every second, network list every 10 s
     def _sample_loop(self):
         last_scan = 0.0
+        read_at = None            # when to read the list after a fresh scan was triggered
         while True:
             started = time.time()
-            reading = read_rssi()
+            try:
+                reading = read_rssi()
+            except Exception as exc:          # never let one bad read kill the live stream
+                reading = {"rssi": None, "ssid": None, "bssid": None, "channel": None,
+                           "band": None, "method": None, "error": f"Reading failed: {exc}"}
             sample = {**reading, "time": round(started, 3), **ping_stats(list(self.pings))}
             sample["alert"] = reading["rssi"] is not None and reading["rssi"] < DEAD_DBM
             with self.new_sample:
@@ -122,13 +129,23 @@ class Sampler:
 
             if started - last_scan >= SCAN_EVERY_S:
                 last_scan = started
+                # A real scan briefly takes the radio off-channel (ping spikes),
+                # so only ask for one while someone has the Networks tab open.
+                fresh = started < self.networks_wanted_until and trigger_scan()
+                read_at = started + SCAN_SETTLE_S if fresh else started
+            if read_at is not None and started >= read_at:
+                read_at = None
                 try:
                     self.networks, self.networks_error = scan_networks(), None
                     self.networks_time = round(time.time(), 3)
-                except RuntimeError as exc:
+                except Exception as exc:
                     self.networks_error = str(exc)
 
             time.sleep(max(0.0, 1.0 - (time.time() - started)))
+
+    def want_networks(self):
+        """Called by /api/networks: keep fresh scans going for the next 30 s."""
+        self.networks_wanted_until = time.time() + 30
 
     # -- thread 2: ping the router every second
     def _ping_loop(self):

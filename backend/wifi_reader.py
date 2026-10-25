@@ -170,6 +170,42 @@ def _read_windows():
     return parse_netsh(_run(["netsh", "wlan", "show", "interfaces"]))
 
 
+def _trigger_scan_windows():
+    """`netsh wlan show networks` only prints Windows' CACHED list, which can be
+    minutes old. WlanScan (wlanapi.dll, via ctypes) asks every Wi-Fi adapter
+    for a fresh scan; the results arrive in the cache a few seconds later."""
+    import ctypes
+    from ctypes import wintypes
+
+    class GUID(ctypes.Structure):
+        _fields_ = [("Data1", wintypes.DWORD), ("Data2", wintypes.WORD),
+                    ("Data3", wintypes.WORD), ("Data4", ctypes.c_ubyte * 8)]
+
+    class InterfaceInfo(ctypes.Structure):            # WLAN_INTERFACE_INFO
+        _fields_ = [("guid", GUID), ("description", ctypes.c_wchar * 256), ("state", ctypes.c_uint)]
+
+    class InterfaceList(ctypes.Structure):            # WLAN_INTERFACE_INFO_LIST
+        _fields_ = [("count", wintypes.DWORD), ("index", wintypes.DWORD), ("items", InterfaceInfo * 1)]
+
+    wlan = ctypes.windll.wlanapi
+    handle, version = wintypes.HANDLE(), wintypes.DWORD()
+    if wlan.WlanOpenHandle(2, None, ctypes.byref(version), ctypes.byref(handle)) != 0:
+        return False
+    try:
+        listing = ctypes.POINTER(InterfaceList)()
+        if wlan.WlanEnumInterfaces(handle, None, ctypes.byref(listing)) != 0:
+            return False
+        try:
+            items = ctypes.cast(ctypes.byref(listing.contents.items), ctypes.POINTER(InterfaceInfo))
+            results = [wlan.WlanScan(handle, ctypes.byref(items[i].guid), None, None, None)
+                       for i in range(listing.contents.count)]
+            return any(code == 0 for code in results)
+        finally:
+            wlan.WlanFreeMemory(listing)
+    finally:
+        wlan.WlanCloseHandle(handle, None)
+
+
 def _scan_windows():
     text = _run(["netsh", "wlan", "show", "networks", "mode=bssid"])
     if _location_blocked(text):
@@ -298,6 +334,17 @@ def read_rssi():
         return _result(error=f"Required system tool not found: {exc}")
     except subprocess.TimeoutExpired:
         return _result(error="Reading the Wi-Fi adapter timed out.")
+
+
+def trigger_scan():
+    """Ask the OS for a fresh network scan. Returns True if one was started
+    (Windows only - nmcli / system_profiler already scan by themselves)."""
+    if platform.system() != "Windows":
+        return False
+    try:
+        return _trigger_scan_windows()
+    except Exception:          # old Windows, no WLAN service... the cached list still works
+        return False
 
 
 def scan_networks():

@@ -244,6 +244,7 @@ def live_rssi():
 
 @app.get("/api/networks")
 def networks():
+    sampler.want_networks()                 # the Networks tab is open: keep scans fresh
     nets = sampler.networks
     return jsonify({"networks": nets, "time": sampler.networks_time, "error": sampler.networks_error,
                     **channels.recommend_24ghz(nets)})
@@ -438,8 +439,10 @@ if __name__ == "__main__":
     sampler.start()                          # background RSSI / ping / scan threads
     # --lan: listen on every network interface so a phone on the same Wi-Fi can
     # open the dashboard. Default: only this laptop (127.0.0.1).
-    host = "0.0.0.0" if "--lan" in sys.argv else "127.0.0.1"
-    # debug=True shows errors; use_reloader=False stops Flask starting twice
-    # (two samplers, two in-memory stores); threaded=True serves the live
-    # stream and normal requests at the same time.
-    app.run(host=host, port=5000, debug=True, use_reloader=False, threaded=True)
+    lan = "--lan" in sys.argv
+    host = "0.0.0.0" if lan else "127.0.0.1"
+    # debug shows errors - but never on the LAN, where Flask's debugger would be
+    # reachable by other devices (errors are still logged in this terminal).
+    # use_reloader=False stops Flask starting twice (two samplers, two in-memory
+    # stores); threaded=True serves the live stream and normal requests at once.
+    app.run(host=host, port=5000, debug=not lan, use_reloader=False, threaded=True)
