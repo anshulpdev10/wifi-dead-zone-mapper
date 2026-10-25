@@ -209,7 +209,7 @@ export default function App() {
     const created = await api.post('/surveys', data)   // errors are shown by the form
     setCreating(false)
     await refreshSurveys(created.id)
-    showOk(`Survey “${created.name}” created. Walk to point 1 and press “I'm here – measure”.`)
+    showOk(`Survey “${created.name}” created. Set the room directions (or skip), then press “Start hands-free”.`)
   }
 
   // "Survey around me": a 12 x 8 m area around where I stand, surveyed with the
@@ -223,7 +223,7 @@ export default function App() {
       setMode('measure')
       setTab('survey')
       await refreshSurveys(created.id)
-      showOk('12 × 8 m area created. Walk to point 1 and press “I\'m here – measure”.')
+      showOk('12 × 8 m area created. Set the room directions (or skip), then press “Start hands-free”.')
     } catch (err) {
       showError(err)
     }
@@ -440,7 +440,7 @@ export default function App() {
           </section>
 
           <aside className="side-panel">
-            <GuidePanel guide={guide} setup={survey.setup} auto={auto} measuring={!!busy} samples={samples}
+            <GuidePanel key={surveyId} guide={guide} setup={survey.setup} auto={auto} measuring={!!busy} samples={samples}
               walkSeconds={walkSeconds} onWalkSecondsChange={setWalkSeconds} voice={voice} onVoiceChange={setVoice}
               onMeasurePoint={(p) => { const point = { x: p.x, y: p.y }; setSelected(point); measureAt(point) }}
               onSkip={(n) => setSkipped((list) => [...list, n])}

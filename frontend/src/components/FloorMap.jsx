@@ -24,6 +24,7 @@ export default function FloorMap({ survey, readings, map, showHeatmap, mode, sel
   const wrapRef = useRef(null)
   const canvasRef = useRef(null)
   const [boxWidth, setBoxWidth] = useState(600)
+  const [viewHeight, setViewHeight] = useState(window.innerHeight)
   const [planImage, setPlanImage] = useState(null)
   const [hover, setHover] = useState(null)        // position under the mouse, in metres
 
@@ -31,7 +32,9 @@ export default function FloorMap({ survey, readings, map, showHeatmap, mode, sel
   useEffect(() => {
     const observer = new ResizeObserver(([entry]) => setBoxWidth(entry.contentRect.width))
     observer.observe(wrapRef.current)
-    return () => observer.disconnect()
+    const onResize = () => setViewHeight(window.innerHeight)   // the height limit follows the window too
+    window.addEventListener('resize', onResize)
+    return () => { observer.disconnect(); window.removeEventListener('resize', onResize) }
   }, [])
 
   // Load the floor-plan image (stored as a data URL) whenever it changes.
@@ -44,7 +47,7 @@ export default function FloorMap({ survey, readings, map, showHeatmap, mode, sel
   }, [survey.plan])
 
   // Pixels per metre: fit the width, but never taller than 70% of the screen.
-  const scale = Math.max(5, Math.min(boxWidth / survey.width, (window.innerHeight * 0.7) / survey.height))
+  const scale = Math.max(5, Math.min(boxWidth / survey.width, (viewHeight * 0.7) / survey.height))
   const cssW = survey.width * scale
   const cssH = survey.height * scale
 
