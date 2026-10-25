@@ -16,6 +16,7 @@ Steps
   5. Calibration       : least-squares fit of the log-distance path-loss model
                          RSSI = A - 10 * n * log10(d) to this building (numpy).
   6. What-if           : predicted heatmap if the router moved (model + residuals).
+  7. Router estimate   : where the router most likely is, from the readings alone.
 
 Steps 1-4 are plain Python so every line can be explained; numpy is only
 used for the least-squares fit.
@@ -268,6 +269,7 @@ def compute_map(width, height, readings, cell=None):
         "stats": stats,
         "advice": advice(stats, regions, suggestion),
         "extender": extender_verdict(stats, regions, suggestion),
+        "router_estimate": estimate_router(width, height, readings),
     }
 
 
@@ -372,4 +374,62 @@ def predict_map(width, height, readings, router, new_router, cell=None):
         "regions": regions, "suggestion": suggestion, "stats": stats,
         "extender": extender_verdict(stats, regions, suggestion),
         "advice": [], "model": {"A": a, "n": n},
+    }
+
+
+# ================================================================ 7. where is the router?
+ROUTER_MIN_READINGS = 4
+ROUTER_STEP_M = 0.25      # candidate positions are tried on this grid (coarser on big floors)
+ROUTER_N_RANGE = (1.5, 6.0)
+
+
+def estimate_router(width, height, readings):
+    """Estimate where the router is from the readings alone.
+
+    Signal falls off with distance as RSSI = A - 10 * n * log10(d). For every
+    candidate position (a fine grid over the floor) we fit A and n by least
+    squares to the readings' distances from that candidate, and keep the
+    candidate whose curve fits best (smallest squared error). Only physically
+    sensible fits count (n between 1.5 and 6). Walls make this approximate, so
+    the result carries a rough "accuracy_m" and is shown as an estimate.
+
+    Returns None with too few / too similar readings."""
+    if len(readings) < ROUTER_MIN_READINGS:
+        return None
+    rx = np.array([r["x"] for r in readings], dtype=float)
+    ry = np.array([r["y"] for r in readings], dtype=float)
+    rssi = np.array([r["rssi_mean"] for r in readings], dtype=float)
+    if np.ptp(rssi) < 3 or max(np.ptp(rx), np.ptp(ry)) < 1:
+        return None                                  # every spot looks the same: no direction to go on
+
+    step = max(ROUTER_STEP_M, max(width, height) / 120)
+    xs = np.arange(step / 2, width, step)
+    ys = np.arange(step / 2, height, step)
+    cx, cy = (a.ravel() for a in np.meshgrid(xs, ys))
+    # distances candidate x reading, at least 0.5 m (the model is not valid closer)
+    d = np.maximum(np.hypot(cx[:, None] - rx[None, :], cy[:, None] - ry[None, :]), CAL_MIN_DIST)
+    x = -10 * np.log10(d)                            # RSSI = A + n * x  (straight line in x)
+    xm = x.mean(axis=1, keepdims=True)
+    var = ((x - xm) ** 2).sum(axis=1)
+    n = ((x - xm) * (rssi - rssi.mean())).sum(axis=1) / np.where(var > 1e-9, var, np.inf)
+    a = rssi.mean() - n * xm[:, 0]
+    sse = ((rssi[None, :] - a[:, None] - n[:, None] * x) ** 2).sum(axis=1)
+    sse[(n < ROUTER_N_RANGE[0]) | (n > ROUTER_N_RANGE[1])] = np.inf
+    if not np.isfinite(sse).any():
+        return None
+
+    best = int(np.argmin(sse))
+    rmse = math.sqrt(sse[best] / len(readings))
+    # Accuracy: how far the candidates that fit almost as well spread out.
+    close = np.isfinite(sse) & (sse <= sse[best] * 1.15 + 1.0)
+    spread = float(np.max(np.hypot(cx[close] - cx[best], cy[close] - cy[best]))) if close.any() else 0.0
+    bx, by = float(cx[best]), float(cy[best])
+    at_edge = bx < step or by < step or bx > width - step or by > height - step
+    confidence = "good" if len(readings) >= 8 and rmse < 5 and spread < 3 else "rough"
+    return {
+        "x": round(bx, 2), "y": round(by, 2),
+        "accuracy_m": round(max(spread, 1.0), 1),      # never claim better than ~1 m indoors
+        "confidence": confidence,
+        "outside": at_edge,         # best spot on the edge: the router is near or beyond it
+        "n": round(float(n[best]), 2), "A": round(float(a[best]), 1), "rmse_db": round(rmse, 1),
     }

@@ -20,6 +20,7 @@ Endpoints
   POST   /api/surveys/<id>/measure        {x, y, samples} -> average N fresh samples (mode "measure")
   POST   /api/surveys/<id>/walk           {x, y}          -> quick 3-sample reading (mode "walk")
   POST   /api/surveys/<id>/readings       {x, y, rssi}    -> manual entry (mode "manual")
+  POST   /api/surveys/<id>/track          {x, y}          -> latest live sample at x, y (mode "track")
   POST   /api/surveys/<id>/rooms/measure  {room, samples} -> room-by-room reading (mode "room")
   GET    /api/surveys/<id>/rooms          per-room signal, extender verdict + room
   DELETE /api/surveys/<id>/rooms/<name>   delete every reading of one room
@@ -40,6 +41,7 @@ import platform
 import queue
 import statistics
 import sys
+import time
 
 from dotenv import load_dotenv
 from flask import Flask, Response, jsonify, request
@@ -65,6 +67,7 @@ RSSI_MIN, RSSI_MAX = -110, -10     # anything outside this is not a real Wi-Fi r
 SAMPLES_DEFAULT, SAMPLES_MIN, SAMPLES_MAX = 10, 3, 30
 WALK_SAMPLES = 3
 ROOM_MAX_CHARS = 40
+TRACK_MAX_AGE_S = 3      # track mode only uses a live sample this fresh
 
 
 # ------------------------------------------------------------------ helpers
@@ -370,6 +373,21 @@ def walk(survey_id):
     x, y = point_in_floor(body(), survey)
     values, last = collect(WALK_SAMPLES)
     return jsonify(save_reading(survey_id, x, y, values, "walk", last)), 201
+
+
+@app.post("/api/surveys/<survey_id>/track")
+def track(survey_id):
+    """Track mode: the dashboard sends where you are every ~2 s while you walk;
+    the newest live sample (taken in the last few seconds) is saved there.
+    No waiting, so a path of readings builds up as you move."""
+    survey = find_survey(survey_id)
+    x, y = point_in_floor(body(), survey)
+    latest = sampler.latest()
+    if latest is None or time.time() - latest["time"] > TRACK_MAX_AGE_S:
+        raise ApiError("No fresh Wi-Fi sample - is the sampler running?", 503)
+    if latest["rssi"] is None:
+        raise ApiError(latest["error"] or "No Wi-Fi reading available.", 503)
+    return jsonify(save_reading(survey_id, x, y, [latest["rssi"]], "track", latest)), 201
 
 
 @app.post("/api/surveys/<survey_id>/readings")

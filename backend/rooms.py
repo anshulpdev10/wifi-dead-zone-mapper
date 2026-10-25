@@ -15,11 +15,14 @@ into an answer:
                   advice also says to pick the spot in that room nearest the
                   dead room.)
   4. Advice     : plain-English tips (unstable rooms, dead spots, more rooms)
+  5. Router room: the strongest room (if strong enough) - the router is
+                  almost always in it or right next to it
 """
 
 from mapping import DEAD_DBM, GOOD_DBM, band_name
 
 UNSTABLE_STD_DB = 4      # a spot whose samples wobbled more than this is "unstable"
+ROUTER_ROOM_DBM = -60    # the strongest room is called "probably the router's room" only if this strong
 
 
 def _status(avg):
@@ -127,9 +130,13 @@ def analyse(readings):
     if len(rooms) < 3:
         advice.append("Measure every room you use Wi-Fi in - the verdict gets more reliable with each room.")
 
+    # The router is almost always in (or right next to) the strongest room.
+    router_room = rooms[0]["name"] if len(rooms) >= 2 and rooms[0]["avg_dbm"] >= ROUTER_ROOM_DBM else None
+
     return {
         "ready": True,
         "preliminary": len(rooms) < 2,
+        "router_room": router_room,
         "rooms": rooms,
         "extender": verdict,
         "extender_room": spot["name"] if spot else None,
