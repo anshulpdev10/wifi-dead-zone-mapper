@@ -10,6 +10,7 @@ export default function Legend() {
           {band.name} <span className="muted">{bandRange(band, i)}</span>
         </li>
       ))}
+      <li><span className="swatch hatched" /> Not measured yet</li>
       <li><span className="swatch dashed" /> Dead-zone outline (&lt; −75)</li>
       <li><span className="symbol" style={{ color: '#2563eb' }}>▲</span> Router</li>
       <li><span className="symbol" style={{ color: '#7c3aed' }}>★</span> Suggested extender</li>

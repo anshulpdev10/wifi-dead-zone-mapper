@@ -385,18 +385,24 @@ def delete_reading(reading_id):
 
 
 # ------------------------------------------------------------------ analysis
+def readings_on_floor(survey):
+    """Readings that lie on the floor. If the survey was later made smaller,
+    points now outside it are left out of the analysis (but not deleted)."""
+    return [r for r in store.list_readings(survey["id"])
+            if 0 <= r["x"] <= survey["width"] and 0 <= r["y"] <= survey["height"]]
+
+
 @app.get("/api/surveys/<survey_id>/map")
 def coverage_map(survey_id):
     survey = find_survey(survey_id)
-    cell = number(request.args, "cell", 0.1, 2, required=False) or 0.25
-    return jsonify(mapping.compute_map(survey["width"], survey["height"],
-                                       store.list_readings(survey_id), cell))
+    cell = number(request.args, "cell", 0.1, 2, required=False)   # None -> size-based default
+    return jsonify(mapping.compute_map(survey["width"], survey["height"], readings_on_floor(survey), cell))
 
 
 @app.get("/api/surveys/<survey_id>/calibration")
 def calibration(survey_id):
     survey = find_survey(survey_id)
-    return jsonify(mapping.calibrate(store.list_readings(survey_id), survey.get("router")))
+    return jsonify(mapping.calibrate(readings_on_floor(survey), survey.get("router")))
 
 
 @app.get("/api/surveys/<survey_id>/whatif")
@@ -404,7 +410,7 @@ def what_if(survey_id):
     """Predict the heatmap if the router stood at (x, y) instead."""
     survey = find_survey(survey_id)
     x, y = point_in_floor(request.args, survey)
-    result = mapping.predict_map(survey["width"], survey["height"], store.list_readings(survey_id),
+    result = mapping.predict_map(survey["width"], survey["height"], readings_on_floor(survey),
                                  survey.get("router"), {"x": x, "y": y})
     if not result.get("ready"):
         raise ApiError(result["message"], 409)

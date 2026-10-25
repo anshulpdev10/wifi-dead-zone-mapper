@@ -4,6 +4,9 @@ mapping.py - turns a handful of measured points into a full coverage map.
 Steps
   1. IDW interpolation : estimate RSSI in every grid cell (default 0.25 m)
                          from the measured points, weight = 1 / distance^2.
+                         Cells farther than reach_for() from every reading are
+                         left empty (None = "not measured yet") instead of
+                         guessed, so one reading does not paint the whole floor.
   2. Dead-zone regions : group neighbouring cells below -75 dBm with a BFS
                          flood fill, drop tiny ones (< 0.5 m^2).
   3. Extender spot     : the good cell (>= -67 dBm) closest to the centre of
@@ -28,6 +31,8 @@ DEAD_DBM = -75        # <  -75 dBm : dead zone (drops, very slow)
 MIN_REGION_M2 = 0.5   # ignore dead regions smaller than this
 MIN_READINGS = 3      # need at least 3 points for dead zones / extender / stats
 IDW_POWER = 2         # weights are 1 / d^2
+MIN_REACH_M = 3.0     # a reading describes the floor at least this far around it
+MAX_CELLS_SIDE = 150  # at most ~150 cells per side, so big floors stay fast
 
 # Colour bands used by the dashboard (lower bound in dBm, name).
 BANDS = [(-50, "Excellent"), (-67, "Good"), (-75, "Fair"), (-85, "Weak")]
@@ -57,27 +62,57 @@ def idw(x, y, points):
     return num / den
 
 
-def build_grid(width, height, points, cell=0.25):
-    """Fill a rows x cols grid; each cell holds the IDW estimate at its centre."""
+def default_cell(width, height):
+    """0.25 m cells, but coarser on big floors so the grid stays fast."""
+    return round(max(0.25, max(width, height) / MAX_CELLS_SIDE), 2)
+
+
+def reach_for(width, height):
+    """How far around a reading the map is filled in. With the 10 guided points
+    spread evenly, every cell is within this distance of a point, so a finished
+    survey has no gaps, while a single reading only colours the area around it."""
+    return max(MIN_REACH_M, math.sqrt(width * height / 10))
+
+
+def cell_centre(index, cell, limit):
+    """Centre of cell `index` along one axis, kept inside the floor."""
+    return min((index + 0.5) * cell, limit)
+
+
+def build_grid(width, height, points, cell=0.25, reach=None):
+    """Fill a rows x cols grid; each cell holds the IDW estimate at its centre,
+    or None when it is farther than `reach` metres from every point."""
     cols = max(1, math.ceil(width / cell))
     rows = max(1, math.ceil(height / cell))
     grid = []
     for r in range(rows):
-        cy = min((r + 0.5) * cell, height)
-        grid.append([idw(min((c + 0.5) * cell, width), cy, points) for c in range(cols)])
+        cy = cell_centre(r, cell, height)
+        row = []
+        for c in range(cols):
+            cx = cell_centre(c, cell, width)
+            if reach is not None and min(math.hypot(cx - px, cy - py) for px, py, _ in points) > reach:
+                row.append(None)
+            else:
+                row.append(idw(cx, cy, points))
+        grid.append(row)
     return grid
 
 
+def _is_dead(value):
+    return value is not None and value < DEAD_DBM
+
+
 # ---------------------------------------------------------- 2. dead-zone regions
-def find_dead_regions(grid, cell):
-    """Breadth-first flood fill over cells below DEAD_DBM (4-neighbours)."""
+def find_dead_regions(grid, cell, width=math.inf, height=math.inf):
+    """Breadth-first flood fill over cells below DEAD_DBM (4-neighbours).
+    Empty (not measured) cells are never part of a dead zone."""
     rows, cols = len(grid), len(grid[0])
     seen = [[False] * cols for _ in range(rows)]
     regions = []
 
     for r0 in range(rows):
         for c0 in range(cols):
-            if seen[r0][c0] or grid[r0][c0] >= DEAD_DBM:
+            if seen[r0][c0] or not _is_dead(grid[r0][c0]):
                 continue
             # New region: explore every connected dead cell from (r0, c0).
             queue = deque([(r0, c0)])
@@ -88,7 +123,7 @@ def find_dead_regions(grid, cell):
                 cells.append((r, c))
                 for nr, nc in ((r + 1, c), (r - 1, c), (r, c + 1), (r, c - 1)):
                     if 0 <= nr < rows and 0 <= nc < cols and not seen[nr][nc] \
-                            and grid[nr][nc] < DEAD_DBM:
+                            and _is_dead(grid[nr][nc]):
                         seen[nr][nc] = True
                         queue.append((nr, nc))
 
@@ -98,8 +133,8 @@ def find_dead_regions(grid, cell):
             regions.append({
                 "area_m2": round(area, 2),
                 "center": {
-                    "x": round(sum((c + 0.5) * cell for _, c in cells) / len(cells), 2),
-                    "y": round(sum((r + 0.5) * cell for r, _ in cells) / len(cells), 2),
+                    "x": round(sum(cell_centre(c, cell, width) for _, c in cells) / len(cells), 2),
+                    "y": round(sum(cell_centre(r, cell, height) for r, _ in cells) / len(cells), 2),
                 },
                 "worst_dbm": round(min(grid[r][c] for r, c in cells), 1),
                 "cells": len(cells),
@@ -110,7 +145,7 @@ def find_dead_regions(grid, cell):
 
 
 # ---------------------------------------------------------- 3. extender spot
-def suggest_extender(grid, cell, regions):
+def suggest_extender(grid, cell, regions, width=math.inf, height=math.inf):
     """Good cell (>= GOOD_DBM) nearest to the centre of the largest dead region."""
     if not regions:
         return None
@@ -118,9 +153,9 @@ def suggest_extender(grid, cell, regions):
     best = None
     for r, row in enumerate(grid):
         for c, value in enumerate(row):
-            if value < GOOD_DBM:
+            if value is None or value < GOOD_DBM:
                 continue
-            x, y = (c + 0.5) * cell, (r + 0.5) * cell
+            x, y = cell_centre(c, cell, width), cell_centre(r, cell, height)
             d = math.hypot(x - target["x"], y - target["y"])
             if best is None or d < best["distance_m"]:
                 best = {"x": round(x, 2), "y": round(y, 2), "rssi": round(value, 1),
@@ -130,14 +165,18 @@ def suggest_extender(grid, cell, regions):
 
 # ---------------------------------------------------------- 4. statistics
 def coverage_stats(grid, cell, readings_rssi, regions):
-    values = [v for row in grid for v in row]
-    total = len(values)
+    """Percentages are of the MEASURED part of the floor; measured_pct says how
+    much of the floor that is."""
+    cells = [v for row in grid for v in row]
+    values = [v for v in cells if v is not None]
+    total = len(values) or 1
     healthy = sum(v >= GOOD_DBM for v in values)
     dead = sum(v < DEAD_DBM for v in values)
     return {
         "healthy_pct": round(100 * healthy / total, 1),
-        "marginal_pct": round(100 * (total - healthy - dead) / total, 1),
+        "marginal_pct": round(100 * (len(values) - healthy - dead) / total, 1),
         "dead_pct": round(100 * dead / total, 1),
+        "measured_pct": round(100 * len(values) / len(cells), 1),
         "dead_area_m2": round(sum(reg["area_m2"] for reg in regions), 2),
         "avg_dbm": round(sum(readings_rssi) / len(readings_rssi), 1),
         "best_dbm": round(max(readings_rssi), 1),
@@ -165,6 +204,9 @@ def advice(stats, regions, suggestion):
     if stats["marginal_pct"] >= 25:
         tips.append("A quarter or more of the floor is only 'fair' - avoid placing the "
                     "router inside cabinets or behind thick walls.")
+    if stats["measured_pct"] < 95:
+        tips.append(f"Only {stats['measured_pct']:g}% of the floor is covered by readings - "
+                    "measure the grey hatched areas too before trusting the result.")
     if stats["readings"] < 8:
         tips.append("Take more readings (8+ spread across the floor) for a more reliable map.")
     return tips
@@ -186,7 +228,12 @@ def extender_verdict(stats, regions, suggestion):
             "reason": f"{len(regions)} dead zone(s), {stats['dead_area_m2']} m² in total.{extra}"}
 
 
-def compute_map(width, height, readings, cell=0.25):
+def _grid_info(grid, cell):
+    return {"cell": cell, "rows": len(grid), "cols": len(grid[0]),
+            "values": [[None if v is None else round(v, 1) for v in row] for row in grid]}
+
+
+def compute_map(width, height, readings, cell=None):
     """Main entry point used by app.py.
     readings = list of dicts with x, y, rssi_mean.
 
@@ -197,10 +244,10 @@ def compute_map(width, height, readings, cell=0.25):
     if not readings:
         return {"ready": False, "message": "No readings yet - mark your position and measure."}
 
+    cell = cell or default_cell(width, height)
     points = [(r["x"], r["y"], r["rssi_mean"]) for r in readings]
-    grid = build_grid(width, height, points, cell)
-    grid_info = {"cell": cell, "rows": len(grid), "cols": len(grid[0]),
-                 "values": [[round(v, 1) for v in row] for row in grid]}
+    grid = build_grid(width, height, points, cell, reach_for(width, height))
+    grid_info = _grid_info(grid, cell)
 
     if len(readings) < MIN_READINGS:
         return {"ready": True, "partial": True, "grid": grid_info,
@@ -208,8 +255,8 @@ def compute_map(width, height, readings, cell=0.25):
                 "regions": [], "suggestion": None, "stats": None, "advice": [], "extender": None,
                 "message": f"Preliminary heatmap from {len(readings)} reading(s). "
                            f"Take at least {MIN_READINGS} to find dead zones and an extender spot."}
-    regions = find_dead_regions(grid, cell)
-    suggestion = suggest_extender(grid, cell, regions)
+    regions = find_dead_regions(grid, cell, width, height)
+    suggestion = suggest_extender(grid, cell, regions, width, height)
     stats = coverage_stats(grid, cell, [p[2] for p in points], regions)
     return {
         "ready": True,
@@ -222,7 +269,7 @@ def compute_map(width, height, readings, cell=0.25):
         "advice": advice(stats, regions, suggestion),
         "extender": extender_verdict(stats, regions, suggestion),
     }
-    
+
 
 # ================================================================ 5. calibration
 CAL_MIN_DIST = 0.5        # readings closer than this to the router are not used
@@ -290,7 +337,7 @@ def calibrate(readings, router):
 
 
 # ================================================================ 6. what-if
-def predict_map(width, height, readings, router, new_router, cell=0.25):
+def predict_map(width, height, readings, router, new_router, cell=None):
     """Predict the coverage if the router moved to new_router.
 
     prediction(cell) = model(distance to NEW router)      <- calibrated A and n
@@ -307,19 +354,21 @@ def predict_map(width, height, readings, router, new_router, cell=0.25):
     def model(x, y, rtr):
         return a - 10 * n * math.log10(max(math.hypot(x - rtr["x"], y - rtr["y"]), CAL_MIN_DIST))
 
+    cell = cell or default_cell(width, height)
     residual_points = [(r["x"], r["y"], r["rssi_mean"] - model(r["x"], r["y"], router)) for r in readings]
-    residual_grid = build_grid(width, height, residual_points, cell)
-    grid = [[model(min((c + 0.5) * cell, width), min((r + 0.5) * cell, height), new_router) + res
+    # Same "measured area" as the real map, so Now and Predicted compare the same cells.
+    residual_grid = build_grid(width, height, residual_points, cell, reach_for(width, height))
+    grid = [[None if res is None else
+             model(cell_centre(c, cell, width), cell_centre(r, cell, height), new_router) + res
              for c, res in enumerate(row)] for r, row in enumerate(residual_grid)]
 
-    regions = find_dead_regions(grid, cell)
-    suggestion = suggest_extender(grid, cell, regions)
+    regions = find_dead_regions(grid, cell, width, height)
+    suggestion = suggest_extender(grid, cell, regions, width, height)
     at_readings = [model(r["x"], r["y"], new_router) + res for r, (_, _, res) in zip(readings, residual_points)]
     stats = coverage_stats(grid, cell, at_readings, regions)
     return {
         "ready": True, "partial": False, "prediction": True, "router": new_router,
-        "grid": {"cell": cell, "rows": len(grid), "cols": len(grid[0]),
-                 "values": [[round(v, 1) for v in row] for row in grid]},
+        "grid": _grid_info(grid, cell),
         "regions": regions, "suggestion": suggestion, "stats": stats,
         "extender": extender_verdict(stats, regions, suggestion),
         "advice": [], "model": {"A": a, "n": n},

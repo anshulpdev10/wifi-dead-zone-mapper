@@ -57,10 +57,12 @@ export default function StatsPanel({ map, guideComplete, setup }) {
       </div>
 
       <dl className="stats">
+        {/* percentages are of the measured part of the floor (hatched areas left out) */}
         <div><dt>Healthy (≥ −67)</dt><dd>{s.healthy_pct}%</dd></div>
         <div><dt>Marginal</dt><dd>{s.marginal_pct}%</dd></div>
         <div><dt>Dead (&lt; −75)</dt><dd>{s.dead_pct}%</dd></div>
         <div><dt>Dead area</dt><dd>{s.dead_area_m2} m²</dd></div>
+        {s.measured_pct != null && <div><dt>Floor measured</dt><dd>{s.measured_pct}%</dd></div>}
         <div><dt>Average</dt><dd>{s.avg_dbm} dBm</dd></div>
         <div><dt>Best / worst</dt><dd>{s.best_dbm} / {s.worst_dbm}</dd></div>
       </dl>

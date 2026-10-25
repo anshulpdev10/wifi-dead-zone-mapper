@@ -77,8 +77,10 @@ export default function FloorMap({ survey, readings, map, showHeatmap, mode, sel
       const lctx = layer.getContext('2d')
       lctx.setTransform(dpr, 0, 0, dpr, 0, 0)
       const size = px(grid.cell)
+      const unknown = []                                  // cells not measured yet (null)
       grid.values.forEach((row, r) =>
         row.forEach((value, c) => {
+          if (value == null) { unknown.push([r, c]); return }
           lctx.fillStyle = bandFor(value).color
           lctx.fillRect(c * size, r * size, size + 0.5, size + 0.5)   // +0.5 hides hairline gaps
         })
@@ -86,6 +88,23 @@ export default function FloorMap({ survey, readings, map, showHeatmap, mode, sel
       ctx.globalAlpha = HEATMAP_ALPHA
       ctx.drawImage(layer, 0, 0, cssW, cssH)
       ctx.globalAlpha = 1
+
+      // Not measured yet: light grey diagonal hatching, so it is clear the map
+      // has no data there (instead of guessing a colour from far-away readings).
+      if (unknown.length) {
+        ctx.save()
+        ctx.beginPath()
+        unknown.forEach(([r, c]) => ctx.rect(c * size, r * size, size + 0.5, size + 0.5))
+        ctx.clip()
+        ctx.fillStyle = 'rgba(154,164,178,0.18)'
+        ctx.fillRect(0, 0, cssW, cssH)
+        ctx.strokeStyle = 'rgba(95,107,122,0.35)'
+        ctx.lineWidth = 1
+        ctx.beginPath()
+        for (let d = -cssH; d < cssW; d += 10) { ctx.moveTo(d, cssH); ctx.lineTo(d + cssH, 0) }
+        ctx.stroke()
+        ctx.restore()
+      }
     }
 
     // 3. 1-metre grid
@@ -100,7 +119,8 @@ export default function FloorMap({ survey, readings, map, showHeatmap, mode, sel
     //    (skipped for a preliminary map of 1-2 readings - too few to locate a dead zone)
     if (grid && !shown.partial) {
       const size = px(grid.cell)
-      const isDead = (r, c) => r >= 0 && c >= 0 && r < grid.rows && c < grid.cols && grid.values[r][c] < DEAD_DBM
+      const isDead = (r, c) => r >= 0 && c >= 0 && r < grid.rows && c < grid.cols &&
+        grid.values[r][c] != null && grid.values[r][c] < DEAD_DBM
       ctx.beginPath()
       for (let r = 0; r < grid.rows; r++) {
         for (let c = 0; c < grid.cols; c++) {
