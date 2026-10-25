@@ -51,6 +51,13 @@ python app.py                     # API + live sampler on http://127.0.0.1:5000
 
 Always run it with the venv's Python (`.venv\Scripts\python app.py`). The startup log shows `[db] mode=...`.
 
+Tests (no Wi-Fi or database needed, always memory mode):
+
+```powershell
+pip install -r requirements-dev.txt
+python -m pytest tests -q          # mapping, netsh parsing, the whole REST API
+```
+
 Optional **simulated** demo data (for testing only, never presented as real), in a
 second terminal while `app.py` runs: `.venv\Scripts\python seed_demo.py`.
 
@@ -73,7 +80,8 @@ npm run dev:lan                   # prints  Network: http://192.168.x.x:5173
 Open that address on the phone. The phone only *shows* the dashboard; the signal is
 still read by the laptop. That makes the phone handy as a remote control: carry the
 laptop and tap your position on the phone. If Windows Firewall asks, allow Node.js on
-**private** networks. (`python app.py --lan` also exposes the API itself on port 5000.)
+**private** networks. (`python app.py --lan` also exposes the API itself on port 5000; Flask's
+debug mode is switched off then, so its debugger is never reachable from other devices.)
 
 ## 4. Using it
 
@@ -106,7 +114,10 @@ off by kilometres, and even phone GPS is off by 5–20 m indoors. So positions c
 3. **Press ▶ Start hands-free** and pick up the laptop. For each point, the laptop
    **says** where to go and counts down (walking time: 5–30 s). It then beeps, measures
    for the chosen time, and announces the result (e.g. *"Point 3: −72 dBm, Fair"*).
-   Then it moves on. Press **Space** when you reach a note to measure right away.
+   Then it moves on. Messages are queued, so a result is never cut off by the next
+   instruction, and the walking countdown starts after the directions have been spoken.
+   Press **Space** when you reach a note to measure right away (it works even when a
+   button has focus).
    **Skip point** handles a spot you can't reach; **Pause** stops it.
 4. If a reading wobbled (standard deviation > 4 dB), it says so and offers **Redo point N**.
 5. After the last point it announces the verdict: *extender required or not*.
@@ -138,10 +149,10 @@ below (#E2513C). Everything below −75 is outlined as a dead zone on the map.
 | Feature | How |
 |---|---|
 | Reading the signal | `wifi_reader.py` runs the OS tool (`netsh` / `/proc/net/wireless` + `iw` / `system_profiler`) and parses its text. Windows 11 prints the real `Rssi`; otherwise `dBm ≈ Signal% / 2 − 100`. |
-| Live updates | `sampler.py` runs a background thread: 1 reading per second into a 120-sample ring buffer, a network scan every 10 s, and a second thread pinging the router every second. `/api/stream` pushes each sample to every open dashboard with **Server-Sent Events** (one long HTTP response the browser keeps open). |
+| Live updates | `sampler.py` runs a background thread: 1 reading per second into a 120-sample ring buffer, the nearby-network list every 10 s, and a second thread pinging the router every second. `netsh` only shows Windows' cached network list, so while the Networks tab is open the sampler asks Windows for a real scan (`WlanScan` in wlanapi.dll, via ctypes) and reads the list 4 s later. Scans are not forced otherwise, because they briefly take the radio off-channel and would spoil the ping numbers during a survey. `/api/stream` pushes each sample to every open dashboard with **Server-Sent Events** (one long HTTP response the browser keeps open). |
 | Measure / Walk | The endpoint waits for N *new* samples from the sampler and saves their mean, standard deviation, min and max. Averaging smooths out fading (the signal's natural second-to-second wobble). |
-| Heatmap | **IDW**: every 0.25 m cell gets a weighted average of the readings, `value = Σ wᵢ·RSSIᵢ / Σ wᵢ` with `wᵢ = 1/dᵢ²`, so nearer readings count more. |
-| Dead zones | Cells below −75 dBm are grouped with a **BFS flood fill** (4 neighbours). Groups under 0.5 m² are ignored. Each zone gets its area, centre and worst value. |
+| Heatmap | **IDW**: every 0.25 m cell (coarser on floors over ~37 m, max ~150 cells per side) gets a weighted average of the readings, `value = Σ wᵢ·RSSIᵢ / Σ wᵢ` with `wᵢ = 1/dᵢ²`, so nearer readings count more. Cells farther than `max(3 m, √(area/10))` from every reading are **not measured yet** (grey hatching) instead of guessed, so the first reading does not colour the whole floor. Once the 10 guided points are done the whole floor is covered. Percentages are of the measured part; *Floor measured* shows how much that is. |
+| Dead zones | Measured cells below −75 dBm are grouped with a **BFS flood fill** (4 neighbours). Groups under 0.5 m² are ignored. Each zone gets its area, centre and worst value. |
 | Extender spot | The cell at −67 dBm or better nearest to the centre of the biggest dead zone: an extender there still gets a strong signal but is as close as possible to the gap. |
 | Calibration | Log-distance model `RSSI = A − 10·n·log₁₀(d)`. With `x = −10·log₁₀(d)` it is a straight line `RSSI = A + n·x`, fitted by **least squares** (numpy). **R² = 1 − SS_res/SS_tot**. A reading 8+ dB below the line is flagged *obstructed* (orange ring). n = 2 in free space and about 3 in homes; higher means more absorption. |
 | What-if | `prediction = model(distance to new router) + IDW(residuals)`. The residuals keep what the model can't see (walls), assuming walls stay put. It's an estimate, so re-survey after moving the router. |
@@ -181,7 +192,7 @@ Errors are always JSON: `{"error": "..."}` with status 400/404/409/503.
 
 | Problem | Fix |
 |---|---|
-| "Disconnected" / "Cannot reach the backend" | Start `.venv\Scripts\python app.py`. The dashboard reconnects by itself. |
+| "Disconnected" / "Cannot reach the backend" | Start `.venv\Scripts\python app.py`. The dashboard reconnects by itself and reloads the survey list (no page refresh needed). |
 | Changes don't show up / missing fields | Flask doesn't reload code (`use_reloader=False`). Press Ctrl+C and start it again. Only one `app.py` should run: Windows lets two share port 5000. |
 | 500 errors | Run with the venv's Python so the pinned versions are used. The real error is printed in the backend terminal. |
 | Health says "no channel/band/mode columns" | Re-run `backend/schema.sql` in Supabase. Until then, the mode is kept in the `method` column. |
@@ -191,7 +202,7 @@ Errors are always JSON: `{"error": "..."}` with status 400/404/409/503.
 | Supabase "permission denied" / empty lists | Use the secret / service_role key, not the anon key. |
 | RSSI barely changes | Windows refreshes it every few seconds and it is stable when you stand still. Use Measure with 10 s or more per spot. |
 | Calibration says "need 5 readings" | Place the router and take 5+ readings at different distances (0.5 m or more from it). |
-| "Saving room directions needs the new 'setup' column" | Re-run `backend/schema.sql` in the Supabase SQL Editor. |
+| Banner "Your Supabase tables are missing the newest columns" | Re-run `backend/schema.sql` in the Supabase SQL Editor and restart `app.py`. Until then room directions are saved in `backend/local_setup.json` on this laptop, and readings don't store channel/band. |
 | No voice during hands-free | Tick *Voice* in the Guide panel and check the laptop's volume. Speech uses the browser's built-in voices. |
 | Phone can't open the dashboard | Use `npm run dev:lan`, the same Wi-Fi, and allow Node.js through the Windows Firewall (private networks). |
 | Linux: no reading / no scan | Check `/proc/net/wireless`, and install `iw` / `wireless-tools` and NetworkManager (`nmcli`). |
