@@ -1,15 +1,19 @@
 // MeasurePanel.jsx - how readings are taken on the floor map:
-//   Track   : Start tracking, then move the pointer (mouse, or your finger on the
-//             phone dashboard) to where you are as you walk. A reading is saved
-//             every 2 s at that spot - the heatmap builds along your path.
+//   Track   : Start tracking and walk. On the phone dashboard your steps + compass
+//             move "you" automatically; on a laptop the pointer is you. A reading
+//             is saved every 2 s at that spot - the heatmap builds along your path.
 //   Measure : tap a spot -> the backend averages N samples there (more accurate).
 //   Manual  : type a dBm value (e.g. from a phone app) for the marked position.
 import { useEffect, useState } from 'react'
+import { isPhone } from '../useStepTracker.js'
 
 const SAMPLE_OPTIONS = [3, 5, 10, 15, 20, 30]   // 1 sample per second
+const FACING = [[0, '→ right'], [90, '↓ down'], [180, '← left'], [270, '↑ up']]
+const STEP_LENGTHS = [0.5, 0.6, 0.7, 0.8, 0.9]
 
 export default function MeasurePanel({ mode, selected, measuring, samples, onSamplesChange,
-  autoMeasure, onAutoChange, onMeasure, onManual, tracking, trackCount, trackError, onTrackToggle }) {
+  autoMeasure, onAutoChange, onMeasure, onManual, tracking, trackCount, trackError, onTrackToggle,
+  stepMode, onStepModeChange, stepStatus, stepCount, facing, onFacingChange, stepLength, onStepLengthChange }) {
   const [manualRssi, setManualRssi] = useState('')
   const [elapsed, setElapsed] = useState(0)
 
@@ -36,12 +40,41 @@ export default function MeasurePanel({ mode, selected, measuring, samples, onSam
         <button className={`big ${tracking ? 'danger' : 'primary'}`} onClick={onTrackToggle} disabled={measuring && !tracking}>
           {tracking ? '■ Stop tracking' : '▶ Start tracking'}
         </button>
+        {isPhone() ? (
+          <label className="check auto">
+            <input type="checkbox" checked={stepMode} disabled={tracking}
+              onChange={(e) => onStepModeChange(e.target.checked)} />
+            Follow my steps automatically (phone sensors)
+          </label>
+        ) : (
+          <p className="muted small">
+            Automatic tracking needs a phone: run <code>npm run dev:lan</code>, open the <strong>https://</strong> address
+            on your phone (accept the certificate warning) and carry it with the laptop.
+          </p>
+        )}
+        {stepMode && !tracking && (
+          <div className="row">
+            <label htmlFor="facing">At Start I face</label>
+            <select id="facing" value={facing} onChange={(e) => onFacingChange(Number(e.target.value))}>
+              {FACING.map(([deg, label]) => <option key={deg} value={deg}>{label} on the map</option>)}
+            </select>
+            <label htmlFor="steplen">Step</label>
+            <select id="steplen" value={stepLength} onChange={(e) => onStepLengthChange(Number(e.target.value))}>
+              {STEP_LENGTHS.map((m) => <option key={m} value={m}>{m} m</option>)}
+            </select>
+          </div>
+        )}
         <p className="small">
-          {tracking
-            ? <>Keep the pointer on <strong>where you are</strong> as you walk (mouse over the map, or your finger on the
-              phone). A reading is saved every 2 s – <strong>{trackCount}</strong> so far.</>
-            : <>Carry the laptop. Press Start, then keep the pointer on your position as you walk – no clicking needed.
-              Tip: open the dashboard on your phone (<code>npm run dev:lan</code>) and drag your finger along as you go.</>}
+          {tracking && stepMode
+            ? <>Just walk, holding the phone flat in front of you. {stepStatus === 'waiting' ? 'Waiting for the sensors…' : <><strong>{stepCount}</strong> steps</>},
+              {' '}<strong>{trackCount}</strong> readings saved. Tap the map if the dot drifts from where you really are.</>
+            : tracking
+              ? <>Keep the pointer on <strong>where you are</strong> as you walk (mouse over the map, or your finger on the
+                phone). A reading is saved every 2 s – <strong>{trackCount}</strong> so far.</>
+              : stepMode
+                ? <>Carry the laptop and phone. Tap where you stand, pick the way you face, press Start and walk – the dot
+                  follows your steps, and a reading is saved every 2 s.</>
+                : <>Carry the laptop. Press Start, then keep the pointer on your position as you walk – no clicking needed.</>}
         </p>
         {trackError && <p className="error small" role="alert">{trackError}</p>}
         <p className="small">You: <strong>{position}</strong></p>

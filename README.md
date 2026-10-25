@@ -115,10 +115,16 @@ debug mode is switched off then, so its debugger is never reachable from other d
 1. **Survey around me** → pick where you are (Classroom, Lab, …) and a **range**: 5, 10, 15,
    20, 30 or 50 m. You get a square map of that size with **you in the centre**, and
    the first reading is taken right there.
-2. Press **▶ Start tracking** and walk, keeping the pointer on where you are: the mouse
-   over the map, or your finger on the phone dashboard (`npm run dev:lan`). No clicking:
-   a reading is saved **every 2 s** at that spot, and the heatmap, dead zones and readings
-   grow along your path. Grey hatching = not measured yet.
+2. Press **▶ Start tracking** and walk. A reading is saved **every 2 s** where you are, and
+   the heatmap, dead zones and readings grow along your path. Grey hatching = not measured yet.
+   - **Phone (automatic):** run `npm run dev:lan`, open the **https://** address it prints on
+     your phone (accept the self-signed certificate warning; phones only give web pages
+     their sensors over https) and carry it with the laptop. Tap where you stand, choose
+     which way you face on the map, press Start and just walk: the **step counter + compass**
+     move your dot (pedestrian dead reckoning, ~0.7 m per step). It drifts a little over
+     long walks, so tap the map to correct it now and then.
+   - **Laptop only:** a laptop has no GPS, compass or motion sensor (Windows location was
+     ±500 m here), so the mouse pointer is you: keep it on your position, no clicking.
 3. **Where is my router?** After 4+ readings in different places the app works it out and
    marks **router?** on the map with an accuracy circle. Press *Yes, it's here* to use it
    (this unlocks calibration and what-if), or place it yourself.

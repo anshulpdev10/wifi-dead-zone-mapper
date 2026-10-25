@@ -12,6 +12,7 @@ import { useEffect, useRef, useState } from 'react'
 import { api } from './api.js'
 import { describePosition } from './position.js'
 import { useLiveStream } from './useLiveStream.js'
+import { isPhone, requestSensorPermission, useStepTracker } from './useStepTracker.js'
 import { bandFor } from './bands.js'
 import { say, unlockAudio, beep } from './sound.js'
 import AroundMeForm from './components/AroundMeForm.jsx'
@@ -53,6 +54,9 @@ export default function App() {
   const [tracking, setTracking] = useState(false)     // track mode running?
   const [trackCount, setTrackCount] = useState(0)
   const [trackError, setTrackError] = useState('')
+  const [stepMode, setStepMode] = useState(isPhone)   // phone: move "you" by steps + compass
+  const [facing, setFacing] = useState(0)            // degrees: 0 = facing → on the map at Start, 90 = ↓ …
+  const [stepLength, setStepLength] = useState(0.7)  // metres per step
   const [showHeatmap, setShowHeatmap] = useState(true)
   const [selected, setSelected] = useState(null)      // {x, y} in metres
   const [busy, setBusy] = useState(null)              // null | 'measure' | 'room'
@@ -145,13 +149,37 @@ export default function App() {
   // Tracking stops when you leave the floor map, change mode or switch survey.
   useEffect(() => { setTracking(false) }, [surveyId, tab, mode])
 
-  function toggleTracking() {
+  // Step tracking: each step moves "you" one step length in the direction you
+  // face. The first step's compass heading = the direction chosen in "I'm facing".
+  const startHeading = useRef(null)
+  const steps = useStepTracker(tracking && stepMode, (heading) => {
+    if (startHeading.current == null) startHeading.current = heading
+    const angle = ((heading - startHeading.current + facing) * Math.PI) / 180   // clockwise; map y points down
+    const clamp = (v, max) => Math.round(Math.min(max, Math.max(0, v)) * 10) / 10
+    setSelected((p) => p && {
+      x: clamp(p.x + stepLength * Math.cos(angle), survey.width),
+      y: clamp(p.y + stepLength * Math.sin(angle), survey.height),
+    })
+  })
+
+  useEffect(() => {
+    if (steps.status !== 'no-sensors') return
+    setStepMode(false)
+    showError(new Error('This device has no motion sensors - keep the pointer on where you are instead.'))
+  }, [steps.status])
+
+  async function toggleTracking() {
     if (tracking) {
       setTracking(false)
       showOk(`Tracking stopped – ${trackCount} reading(s) saved along your path.`)
       return
     }
+    if (stepMode && !(await requestSensorPermission())) {
+      showError(new Error('Motion sensors were not allowed - move your finger on the map instead.'))
+      setStepMode(false)
+    }
     if (!selected) setSelected({ x: survey.width / 2, y: survey.height / 2 })
+    startHeading.current = null
     setTrackCount(0); setTrackError(''); setWhatIfMode(false); setWhatIf(null)
     setTracking(true)
   }
@@ -392,8 +420,12 @@ export default function App() {
   const statusLabel = { live: 'Live', connecting: 'Connecting…', disconnected: 'Disconnected' }[stream.status]
   const hint = {
     track: tracking
-      ? 'Tracking: keep the pointer (or your finger) on where you are as you walk. A reading is saved every 2 s.'
-      : 'Press “Start tracking”, then keep the pointer on where you are as you walk – the heatmap builds along your path.',
+      ? (stepMode
+        ? 'Tracking your steps: just walk. Tap the map if the dot drifts from where you really are.'
+        : 'Tracking: keep the pointer (or your finger) on where you are as you walk. A reading is saved every 2 s.')
+      : (stepMode
+        ? 'Tap where you stand, choose the way you face, press “Start tracking” and walk – the dot follows your steps.'
+        : 'Press “Start tracking”, then keep the pointer on where you are as you walk – the heatmap builds along your path.'),
     measure: autoMeasure
       ? `Walk, stop, and tap where you are now - it measures there for ${samples} s. Roughly is fine.`
       : 'Tap where you are standing, then press “Measure here”. Arrow keys move the marker.',
@@ -472,7 +504,9 @@ export default function App() {
             samples={samples} onSamplesChange={setSamples}
             autoMeasure={autoMeasure} onAutoChange={setAutoMeasure}
             onMeasure={() => measureAt(selected)} onManual={handleManual}
-            tracking={tracking} trackCount={trackCount} trackError={trackError} onTrackToggle={toggleTracking} />
+            tracking={tracking} trackCount={trackCount} trackError={trackError} onTrackToggle={toggleTracking}
+            stepMode={stepMode} onStepModeChange={setStepMode} stepStatus={steps.status} stepCount={steps.steps}
+            facing={facing} onFacingChange={setFacing} stepLength={stepLength} onStepLengthChange={setStepLength} />
           <RouterCard estimate={map?.router_estimate} router={survey.router} busy={!!busy}
             onUse={setRouter} onPlace={() => setMode('router')} onRemove={() => setRouter(null)} />
           <StatsPanel map={map} />
