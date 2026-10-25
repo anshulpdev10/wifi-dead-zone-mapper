@@ -104,16 +104,25 @@ export default function App() {
     },
   })
 
-  // Space = "I'm here, measure now" while the hands-free survey is walking.
+  // Space = "I'm here, measure now" while the hands-free survey is running.
+  // Buttons are NOT skipped: after clicking "Start hands-free" the focus stays on
+  // that button (now "Pause"), and the browser would otherwise press it on Space.
+  // keyup is blocked too, because buttons are activated on Space keyup.
   useEffect(() => {
     if (!auto.running) return
-    const onKey = (e) => {
-      if (e.code !== 'Space' || ['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON'].includes(e.target.tagName)) return
+    const isTyping = (e) => ['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)
+    const onKeyDown = (e) => {
+      if (e.code !== 'Space' || isTyping(e)) return
       e.preventDefault()
-      auto.measureNow()
+      if (!e.repeat) auto.measureNow()
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    const onKeyUp = (e) => { if (e.code === 'Space' && !isTyping(e)) e.preventDefault() }
+    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('keyup', onKeyUp)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('keyup', onKeyUp)
+    }
   }, [auto.running, auto.phase])
 
   // Switching survey stops a hands-free run.
@@ -122,11 +131,16 @@ export default function App() {
   const showError = (err) => setNotice({ kind: 'error', text: err.message })
   const showOk = (text) => setNotice({ kind: 'ok', text })
 
-  // On start: check the backend and load the survey list.
+  // On start, and every time the live stream (re)connects - e.g. the backend was
+  // started after the dashboard, or restarted - check the backend and reload the
+  // survey list, so an old "cannot reach the backend" error clears by itself.
   useEffect(() => {
-    api.get('/health').then(setHealth).catch((err) => setBackendError(err.message))
+    if (stream.status === 'disconnected') return
+    api.get('/health')
+      .then((h) => { setHealth(h); setBackendError('') })
+      .catch((err) => setBackendError(err.message))
     refreshSurveys()
-  }, [])
+  }, [stream.status === 'live'])
 
   // Success messages disappear after 4 seconds; errors stay until dismissed.
   useEffect(() => {
@@ -155,6 +169,7 @@ export default function App() {
   async function refreshSurveys(preferId) {
     try {
       const list = await api.get('/surveys')
+      setBackendError('')
       setSurveys(list)
       setSurveyId((current) => {
         const wanted = preferId ?? current
