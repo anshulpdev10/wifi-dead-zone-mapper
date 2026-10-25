@@ -19,7 +19,10 @@ from datetime import datetime, timezone
 # Columns returned for the survey dropdown (the plan image is left out - it is big).
 SURVEY_SUMMARY = ("id", "name", "width", "height", "created")
 # Reading columns added for the live version (see the "upgrade" part of schema.sql).
-NEW_READING_COLUMNS = ("channel", "band", "mode")
+NEW_READING_COLUMNS = ("channel", "band", "mode", "room")
+# Old tables have no "room" column: a room reading is then saved with
+# method = "room:Kitchen" and turned back into room = "Kitchen" when read.
+ROOM_PREFIX = "room:"
 
 
 class SchemaOutdated(Exception):
@@ -205,15 +208,25 @@ class SupabaseStore:
     def list_readings(self, survey_id):
         if not _is_uuid(survey_id):
             return []
-        return self._run(self._table("readings").select("*").eq("survey_id", survey_id)
+        rows = self._run(self._table("readings").select("*").eq("survey_id", survey_id)
                          .order("time"))
+        return [self._from_old(r) for r in rows]
+
+    def _from_old(self, row):
+        """Recover a room name kept in "method" (saved while the table was old;
+        still works after schema.sql has been re-run)."""
+        method = row.get("method") or ""
+        if not row.get("room") and method.startswith(ROOM_PREFIX):
+            return {**row, "room": method[len(ROOM_PREFIX):], "mode": "room"}
+        return row
 
     def add_reading(self, data):
         if self.missing_columns:
-            # Old table: keep at least the mode (measure / walk / manual) in "method".
-            data = {**{k: v for k, v in data.items() if k not in NEW_READING_COLUMNS},
-                    "method": data.get("mode") or data.get("method")}
-        return self._run(self._table("readings").insert(data), retry=False)[0]
+            # Old table: keep at least the mode (measure / walk / manual) in "method",
+            # or "room:<name>" for a room reading.
+            method = ROOM_PREFIX + data["room"] if data.get("room") else data.get("mode") or data.get("method")
+            data = {**{k: v for k, v in data.items() if k not in NEW_READING_COLUMNS}, "method": method}
+        return self._from_old(self._run(self._table("readings").insert(data), retry=False)[0])
 
     def delete_reading(self, reading_id):
         if not _is_uuid(reading_id):
@@ -231,7 +244,7 @@ def connect():
         store = SupabaseStore(url, key)
         if store.missing_columns or not store.has_setup:
             return store, (f"Connected to Supabase ({url}), but the tables are missing the newest "
-                           "columns (channel/band/mode, setup) - re-run schema.sql to add them. "
+                           "columns (channel/band/mode/room, setup) - re-run schema.sql to add them. "
                            "Until then room directions are kept in backend/local_setup.json.")
         return store, f"Connected to Supabase ({url})."
     except Exception as exc:   # bad key, no internet, tables missing...

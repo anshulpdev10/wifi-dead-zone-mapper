@@ -34,7 +34,9 @@ create index if not exists readings_survey_idx on readings(survey_id);
 -- Wi-Fi channel and band of the connected network, and how the reading was taken.
 alter table readings add column if not exists channel integer;
 alter table readings add column if not exists band    text;     -- "2.4 GHz" / "5 GHz"
-alter table readings add column if not exists mode    text;     -- "measure" | "walk" | "manual"
+alter table readings add column if not exists mode    text;     -- "measure" | "walk" | "manual" | "room"
+-- Room-by-room survey: the room the reading was taken in (null = floor-map reading).
+alter table readings add column if not exists room    text;
 -- How to find the guided points in the real room:
 -- {"corner": "door corner", "wall": "window wall", "step_m": 0.75}
 alter table surveys  add column if not exists setup   jsonb;

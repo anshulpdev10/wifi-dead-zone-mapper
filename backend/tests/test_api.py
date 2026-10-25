@@ -1,18 +1,4 @@
-"""REST API in memory mode. The background sampler is not started; measure /
-walk get fake samples instead of reading the real Wi-Fi adapter."""
-import pytest
-
-import app as backend
-
-
-@pytest.fixture
-def client(monkeypatch):
-    backend.store.surveys.clear()
-    backend.store.readings.clear()
-    fake = [{"rssi": v, "ssid": "TestNet", "channel": 6, "band": "2.4 GHz", "method": "test", "error": None}
-            for v in (-60, -62, -61, -63, -59, -60, -61, -62, -60, -61)]
-    monkeypatch.setattr(backend.sampler, "wait_for_samples", lambda n, timeout=None: fake[:n])
-    return backend.app.test_client()
+"""REST API in memory mode (the `client` fixture is in conftest.py)."""
 
 
 def make_survey(client, **extra):

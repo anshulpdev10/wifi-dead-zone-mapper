@@ -20,6 +20,9 @@ Endpoints
   POST   /api/surveys/<id>/measure        {x, y, samples} -> average N fresh samples (mode "measure")
   POST   /api/surveys/<id>/walk           {x, y}          -> quick 3-sample reading (mode "walk")
   POST   /api/surveys/<id>/readings       {x, y, rssi}    -> manual entry (mode "manual")
+  POST   /api/surveys/<id>/rooms/measure  {room, samples} -> room-by-room reading (mode "room")
+  GET    /api/surveys/<id>/rooms          per-room signal, extender verdict + room
+  DELETE /api/surveys/<id>/rooms/<name>   delete every reading of one room
   DELETE /api/readings/<id>               delete one reading
   GET    /api/surveys/<id>/map            heatmap grid, dead zones, extender, stats
   GET    /api/surveys/<id>/calibration    path-loss model fitted to this survey
@@ -46,6 +49,7 @@ from werkzeug.exceptions import HTTPException
 import channels
 import db
 import mapping
+import rooms
 from sampler import sampler
 
 load_dotenv()                      # reads backend/.env (SUPABASE_URL, SUPABASE_KEY)
@@ -60,6 +64,7 @@ print(f"[db] mode={store.mode}: {db_message}")
 RSSI_MIN, RSSI_MAX = -110, -10     # anything outside this is not a real Wi-Fi reading
 SAMPLES_DEFAULT, SAMPLES_MIN, SAMPLES_MAX = 10, 3, 30
 WALK_SAMPLES = 3
+ROOM_MAX_CHARS = 40
 
 
 # ------------------------------------------------------------------ helpers
@@ -333,13 +338,13 @@ def collect(n):
     return [s["rssi"] for s in good], good[-1]
 
 
-def save_reading(survey_id, x, y, values, mode, info=None):
+def save_reading(survey_id, x, y, values, mode, info=None, room=None):
     """Store a reading and tell every open dashboard about it."""
     info = info or {}
     reading = store.add_reading({
         "survey_id": survey_id, "x": x, "y": y, **summarise(values),
         "ssid": info.get("ssid"), "channel": info.get("channel"), "band": info.get("band"),
-        "method": info.get("method") or mode, "mode": mode,
+        "method": info.get("method") or mode, "mode": mode, "room": room,
     })
     sampler.publish("reading", {"survey_id": survey_id, "action": "added", "reading": reading})
     return reading
@@ -378,6 +383,50 @@ def manual_reading(survey_id):
     return jsonify(save_reading(survey_id, x, y, [rssi], "manual", info)), 201
 
 
+def room_name(data):
+    """Room name from the request: trimmed, single spaces, 1-40 characters."""
+    name = " ".join(str(data.get("room") or "").split())
+    if not name:
+        raise ApiError("'room' is required, e.g. 'Kitchen'.")
+    if len(name) > ROOM_MAX_CHARS:
+        raise ApiError(f"'room' must be at most {ROOM_MAX_CHARS} characters.")
+    return name
+
+
+@app.post("/api/surveys/<survey_id>/rooms/measure")
+def measure_room(survey_id):
+    """Room-by-room survey: average N fresh samples and file them under a room.
+    No position is needed (x, y are stored as 0 and ignored)."""
+    find_survey(survey_id)
+    data = body()
+    room = room_name(data)
+    n = int(number(data, "samples", required=False) or SAMPLES_DEFAULT)
+    n = max(SAMPLES_MIN, min(SAMPLES_MAX, n))
+    values, last = collect(n)
+    return jsonify(save_reading(survey_id, 0, 0, values, "room", last, room=room)), 201
+
+
+@app.get("/api/surveys/<survey_id>/rooms")
+def room_results(survey_id):
+    """Per-room signal, extender verdict and where to put it."""
+    find_survey(survey_id)
+    return jsonify(rooms.analyse(store.list_readings(survey_id)))
+
+
+@app.delete("/api/surveys/<survey_id>/rooms/<path:name>")
+def delete_room(survey_id, name):
+    """Delete every reading taken in one room."""
+    find_survey(survey_id)
+    ids = [r["id"] for r in store.list_readings(survey_id)
+           if (r.get("room") or "").casefold() == name.strip().casefold()]
+    if not ids:
+        raise ApiError("Room not found.", 404)
+    for reading_id in ids:
+        store.delete_reading(reading_id)
+    sampler.publish("reading", {"survey_id": survey_id, "action": "deleted", "id": ids[0]})
+    return jsonify({"deleted": len(ids)})
+
+
 @app.delete("/api/readings/<reading_id>")
 def delete_reading(reading_id):
     if not store.delete_reading(reading_id):
@@ -388,10 +437,11 @@ def delete_reading(reading_id):
 
 # ------------------------------------------------------------------ analysis
 def readings_on_floor(survey):
-    """Readings that lie on the floor. If the survey was later made smaller,
-    points now outside it are left out of the analysis (but not deleted)."""
+    """Floor-map readings that lie on the floor. Room readings have no position,
+    and if the survey was later made smaller, points now outside it are left
+    out of the analysis (but not deleted)."""
     return [r for r in store.list_readings(survey["id"])
-            if 0 <= r["x"] <= survey["width"] and 0 <= r["y"] <= survey["height"]]
+            if not r.get("room") and 0 <= r["x"] <= survey["width"] and 0 <= r["y"] <= survey["height"]]
 
 
 @app.get("/api/surveys/<survey_id>/map")
@@ -424,10 +474,12 @@ def export_csv(survey_id):
     survey = find_survey(survey_id)
     out = io.StringIO()
     writer = csv.writer(out)
-    writer.writerow(["x_m", "y_m", "rssi_mean_dbm", "rssi_std_db", "min_dbm", "max_dbm",
+    writer.writerow(["room", "x_m", "y_m", "rssi_mean_dbm", "rssi_std_db", "min_dbm", "max_dbm",
                      "n_samples", "band_quality", "ssid", "channel", "wifi_band", "mode", "time"])
     for r in store.list_readings(survey_id):
-        writer.writerow([r["x"], r["y"], r["rssi_mean"], r["rssi_std"], r["min"], r["max"],
+        room = r.get("room") or ""
+        writer.writerow([room, "" if room else r["x"], "" if room else r["y"],
+                         r["rssi_mean"], r["rssi_std"], r["min"], r["max"],
                          len(r["samples"]), mapping.band_name(r["rssi_mean"]), r.get("ssid") or "",
                          r.get("channel") or "", r.get("band") or "",
                          r.get("mode") or r.get("method") or "", r["time"]])
