@@ -88,6 +88,10 @@ def ping_stats(pings):
 
 
 # ------------------------------------------------------------------ the sampler
+class MeasurementCancelled(Exception):
+    """A running measurement was stopped by the user (cancel_waits)."""
+
+
 class Sampler:
     def __init__(self):
         self.samples = deque(maxlen=HISTORY_SIZE)   # ring buffer: oldest drop off
@@ -97,6 +101,7 @@ class Sampler:
         self.networks_wanted_until = 0.0             # see want_networks()
         self.gateway = None
         self.new_sample = threading.Condition()      # wakes up threads waiting for samples
+        self.cancel_gen = 0                          # bumped by cancel_waits()
         self.listeners = []                          # one queue per open /api/stream
         self.listeners_lock = threading.Lock()
         self.started = False
@@ -170,12 +175,21 @@ class Sampler:
         (Samples already in the buffer are ignored - the user may have just moved.)"""
         timeout = timeout or n * 1.5 + 5
         with self.new_sample:
-            start = self.count
-            ok = self.new_sample.wait_for(lambda: self.count - start >= n, timeout=timeout)
+            start, gen = self.count, self.cancel_gen
+            ok = self.new_sample.wait_for(lambda: self.count - start >= n or self.cancel_gen != gen,
+                                          timeout=timeout)
             fresh = list(self.samples)[-(self.count - start):] if self.count > start else []
+            if self.cancel_gen != gen:
+                raise MeasurementCancelled()
         if not ok:
             raise TimeoutError(f"Only {len(fresh)} of {n} samples arrived in {timeout:.0f} s.")
         return fresh[-n:]
+
+    def cancel_waits(self):
+        """Stop every measurement that is waiting for samples (the Stop button)."""
+        with self.new_sample:
+            self.cancel_gen += 1
+            self.new_sample.notify_all()
 
     # -- live stream (Server-Sent Events) fan-out
     def subscribe(self):

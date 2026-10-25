@@ -12,7 +12,7 @@ const FACING = [[0, '→ right'], [90, '↓ down'], [180, '← left'], [270, '�
 const STEP_LENGTHS = [0.5, 0.6, 0.7, 0.8, 0.9]
 
 export default function MeasurePanel({ mode, selected, measuring, samples, onSamplesChange,
-  autoMeasure, onAutoChange, onMeasure, onManual, tracking, trackCount, trackError, onTrackToggle,
+  autoMeasure, onAutoChange, onMeasure, onManual, onStop, tracking, trackCount, trackError, onTrackToggle,
   stepMode, onStepModeChange, stepStatus, stepCount, facing, onFacingChange, stepLength, onStepLengthChange }) {
   const [manualRssi, setManualRssi] = useState('')
   const [elapsed, setElapsed] = useState(0)
@@ -99,7 +99,8 @@ export default function MeasurePanel({ mode, selected, measuring, samples, onSam
         {measuring && (
           <div className="progress" role="status">
             <div style={{ width: `${Math.min(100, (elapsed / samples) * 100)}%` }} />
-            <span className="small">Hold still… {Math.min(elapsed, samples)} / {samples} s</span>
+            <span className="small">Hold still – don't walk until it says done… {Math.min(elapsed, samples)} / {samples} s</span>
+            <button className="danger small-button" onClick={onStop}>■ Stop</button>
           </div>
         )}
       </>}

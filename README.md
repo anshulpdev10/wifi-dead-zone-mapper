@@ -104,7 +104,11 @@ debug mode is switched off then, so its debugger is never reachable from other d
 2. Go to a room, hold the laptop where you normally use it (desk, bench, bed), pick the
    room (**College**: Classroom, Lab, Library…, **Home**: Bedroom, Kitchen…, **Office**,
    or type your own, e.g. *Lab 3*) and press **Measure**. It averages 5–30 s of samples
-   and speaks the result.
+   and speaks the result; **stay in the room until it says "done, you can move"**.
+   Every number really comes from that room: if the signal changes by 7 dB or more
+   during the count (you walked into another room), nothing is saved and it asks you to
+   measure again. **■ Stop** cancels a measurement, and on the phone dashboard it stops
+   by itself as soon as you start walking.
 3. Measure the same room again to add another spot; the room shows its average, best and worst.
 4. **Results:** every room ranked with a colour bar (marks at −67 and −75 dBm), the verdict
    (*★ Extender required* / *✓ No extender needed*), the **best room for the extender**,
@@ -194,7 +198,8 @@ Newer Windows 11 builds hide Wi-Fi details from `netsh` unless Location is allow
 | POST | `/api/surveys/<id>/walk` | `{x, y}`: quick 3-sample reading |
 | POST | `/api/surveys/<id>/readings` | `{x, y, rssi}`: manual entry |
 | POST | `/api/surveys/<id>/track` | `{x, y}`: newest live sample saved at x, y (track mode) |
-| POST | `/api/surveys/<id>/rooms/measure` | `{room, samples}`: room-by-room reading |
+| POST | `/api/surveys/<id>/rooms/measure` | `{room, samples}`: room-by-room reading (409 if you moved) |
+| POST | `/api/measure/cancel` | Stop button: the running measurement ends, nothing saved |
 | GET | `/api/surveys/<id>/rooms` | per-room signal, extender verdict + room, advice |
 | DELETE | `/api/surveys/<id>/rooms/<name>` | delete one room's readings |
 | DELETE | `/api/readings/<id>` | delete a reading |

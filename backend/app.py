@@ -22,6 +22,7 @@ Endpoints
   POST   /api/surveys/<id>/readings       {x, y, rssi}    -> manual entry (mode "manual")
   POST   /api/surveys/<id>/track          {x, y}          -> latest live sample at x, y (mode "track")
   POST   /api/surveys/<id>/rooms/measure  {room, samples} -> room-by-room reading (mode "room")
+  POST   /api/measure/cancel              stop a running measurement (nothing is saved)
   GET    /api/surveys/<id>/rooms          per-room signal, extender verdict + room
   DELETE /api/surveys/<id>/rooms/<name>   delete every reading of one room
   DELETE /api/readings/<id>               delete one reading
@@ -52,7 +53,7 @@ import channels
 import db
 import mapping
 import rooms
-from sampler import sampler
+from sampler import MeasurementCancelled, sampler
 
 load_dotenv()                      # reads backend/.env (SUPABASE_URL, SUPABASE_KEY)
 
@@ -66,6 +67,7 @@ print(f"[db] mode={store.mode}: {db_message}")
 RSSI_MIN, RSSI_MAX = -110, -10     # anything outside this is not a real Wi-Fi reading
 SAMPLES_DEFAULT, SAMPLES_MIN, SAMPLES_MAX = 10, 3, 30
 WALK_SAMPLES = 3
+MOVED_DB = 7                       # signal change during a still measurement that means "you walked"
 ROOM_MAX_CHARS = 40
 TRACK_MAX_AGE_S = 3      # track mode only uses a live sample this fresh
 
@@ -326,11 +328,15 @@ def summarise(samples):
     }
 
 
-def collect(n):
+def collect(n, still=False):
     """Wait for n fresh samples from the background sampler (1 per second).
+    still=True: the user must stand still (Measure / room) - refuse to save if
+    the signal clearly changed during the count, i.e. they walked somewhere else.
     Returns (rssi values, last good sample)."""
     try:
         fresh = sampler.wait_for_samples(n)
+    except MeasurementCancelled:
+        raise ApiError("Measurement stopped - nothing was saved.", 409)
     except TimeoutError as exc:
         raise ApiError(str(exc), 503)
     good = [s for s in fresh if s["rssi"] is not None]
@@ -338,7 +344,22 @@ def collect(n):
         raise ApiError(fresh[-1]["error"] or "No Wi-Fi reading available.", 503)
     if len(good) < min(n, SAMPLES_MIN):
         raise ApiError(f"Only {len(good)} of {n} samples succeeded: {fresh[-1]['error']}", 503)
-    return [s["rssi"] for s in good], good[-1]
+    values = [s["rssi"] for s in good]
+    change = signal_change(values) if still else 0
+    if change >= MOVED_DB:
+        raise ApiError(f"The signal changed by {change:.0f} dB during the measurement - you probably moved. "
+                       "Nothing was saved: stand still until it says done, and measure again.", 409)
+    return values, good[-1]
+
+
+def signal_change(values):
+    """dB between the first and the last part of a measurement (median of each
+    half, middle sample skipped). Standing still it stays within ~3 dB; walking
+    into another room usually changes it by 7 dB or more."""
+    if len(values) < 5:
+        return 0
+    half = len(values) // 2
+    return abs(statistics.median(values[-half:]) - statistics.median(values[:half]))
 
 
 def save_reading(survey_id, x, y, values, mode, info=None, room=None):
@@ -362,7 +383,7 @@ def measure(survey_id):
     x, y = point_in_floor(data, survey)
     n = int(number(data, "samples", required=False) or SAMPLES_DEFAULT)
     n = max(SAMPLES_MIN, min(SAMPLES_MAX, n))      # clamp to 3..30
-    values, last = collect(n)
+    values, last = collect(n, still=True)
     return jsonify(save_reading(survey_id, x, y, values, "measure", last)), 201
 
 
@@ -420,8 +441,15 @@ def measure_room(survey_id):
     room = room_name(data)
     n = int(number(data, "samples", required=False) or SAMPLES_DEFAULT)
     n = max(SAMPLES_MIN, min(SAMPLES_MAX, n))
-    values, last = collect(n)
+    values, last = collect(n, still=True)
     return jsonify(save_reading(survey_id, 0, 0, values, "room", last, room=room)), 201
+
+
+@app.post("/api/measure/cancel")
+def cancel_measurement():
+    """Stop button: the running Measure / room measurement ends without saving."""
+    sampler.cancel_waits()
+    return jsonify({"cancelled": True})
 
 
 @app.get("/api/surveys/<survey_id>/rooms")

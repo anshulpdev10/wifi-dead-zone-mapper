@@ -313,20 +313,48 @@ export default function App() {
   }
 
   // Shared by every kind of measurement: run the request, show + speak the result, refresh.
+  // Stop button (or, on a phone, walking off during the count): the backend
+  // ends the measurement without saving anything.
+  const stopReason = useRef(null)
+  async function stopMeasuring(reason = 'user') {
+    stopReason.current = reason
+    try {
+      await api.post('/measure/cancel')
+    } catch (err) {
+      showError(err)
+    }
+  }
+  const walkSteps = useRef(0)
+  useStepTracker(isPhone() && !tracking && (busy === 'room' || busy === 'measure'), () => {
+    walkSteps.current += 1
+    if (walkSteps.current === 2 && !stopReason.current) stopMeasuring('walked')   // 2 steps, not one jolt
+  })
+
   async function record(kind, request, where) {
     setBusy(kind)
     setNotice(null)
+    stopReason.current = null
+    walkSteps.current = 0
+    if (isPhone()) requestSensorPermission()       // iOS only asks from a button press
     try {
       const r = await request()
       setLastAddedId(r.id)
       const label = where(r)
       showOk(`Saved ${r.rssi_mean} dBm ± ${r.rssi_std} ${label} (${r.samples.length} samples).`)
       beep(880, 0.15)
-      speak(`${r.room ? r.room + ': ' : ''}${Math.round(r.rssi_mean)} dBm, ${bandFor(r.rssi_mean).name}.`)
+      speak(`${r.room ? r.room + ': ' : ''}${Math.round(r.rssi_mean)} dBm, ${bandFor(r.rssi_mean).name}. Done, you can move.`)
       await refreshReadings()
       return r
     } catch (err) {
-      showError(err)
+      if (stopReason.current === 'user') showOk('Stopped – nothing was saved.')
+      else if (stopReason.current === 'walked') {
+        showError(new Error('You started walking, so the measurement was stopped and nothing was saved. '
+          + 'Stand still in the room and measure again.'))
+        speak('You moved. Stand still and measure again.')
+      } else {
+        showError(err)
+        if (err.message.includes('you probably moved')) speak('The signal changed, you probably moved. Stand still and measure again.')
+      }
       return null
     } finally {
       setBusy(null)
@@ -340,6 +368,7 @@ export default function App() {
   // Room-by-room: average `samples` samples and file them under the room's name.
   const measureRoom = (room) => {
     unlockAudio()
+    speak(`Measuring ${room}. Stand still for ${samples} seconds.`)
     return record('room', () => api.post(`/surveys/${surveyId}/rooms/measure`, { room, samples }),
       (r) => `in ${r.room}`)
   }
@@ -448,7 +477,8 @@ export default function App() {
     content = (
       <main className="layout">
         <RoomsTab key={surveyId} result={rooms} busy={busy} samples={samples} onSamplesChange={setSamples}
-          voice={voice} onVoiceChange={setVoice} onMeasure={measureRoom} onDeleteRoom={handleDeleteRoom}
+          voice={voice} onVoiceChange={setVoice} onMeasure={measureRoom} onStop={() => stopMeasuring()}
+          onDeleteRoom={handleDeleteRoom}
           exportHref={exportHref} onDeleteSurvey={handleDeleteSurvey} />
         <aside className="side-panel">
           <SignalMeter samples={stream.samples} latest={stream.latest} status={stream.status} />
@@ -503,7 +533,7 @@ export default function App() {
           <MeasurePanel mode={mode} selected={selected} measuring={!!busy}
             samples={samples} onSamplesChange={setSamples}
             autoMeasure={autoMeasure} onAutoChange={setAutoMeasure}
-            onMeasure={() => measureAt(selected)} onManual={handleManual}
+            onMeasure={() => measureAt(selected)} onManual={handleManual} onStop={() => stopMeasuring()}
             tracking={tracking} trackCount={trackCount} trackError={trackError} onTrackToggle={toggleTracking}
             stepMode={stepMode} onStepModeChange={setStepMode} stepStatus={steps.status} stepCount={steps.steps}
             facing={facing} onFacingChange={setFacing} stepLength={stepLength} onStepLengthChange={setStepLength} />

@@ -15,7 +15,7 @@ const STATUS_LABEL = { good: 'Good', fair: 'Fair', dead: 'Dead zone' }
 
 const barPct = (dbm) => Math.max(2, Math.min(100, ((dbm - SCALE_BOTTOM) / (SCALE_TOP - SCALE_BOTTOM)) * 100))
 
-function Progress({ seconds }) {
+function Progress({ seconds, room, onStop }) {
   const [elapsed, setElapsed] = useState(0)
   useEffect(() => {
     const timer = setInterval(() => setElapsed((s) => s + 1), 1000)
@@ -24,13 +24,16 @@ function Progress({ seconds }) {
   return (
     <div className="progress" role="status">
       <div style={{ width: `${Math.min(100, (elapsed / seconds) * 100)}%` }} />
-      <span className="small">Hold still… {Math.min(elapsed, seconds)} / {seconds} s</span>
+      <span className="small">
+        Stay in <strong>{room}</strong> and hold still – don't walk until it says done… {Math.min(elapsed, seconds)} / {seconds} s
+      </span>
+      <button className="danger small-button" onClick={onStop}>■ Stop</button>
     </div>
   )
 }
 
 export default function RoomsTab({ result, busy, samples, onSamplesChange, voice, onVoiceChange,
-  onMeasure, onDeleteRoom, exportHref, onDeleteSurvey }) {
+  onMeasure, onStop, onDeleteRoom, exportHref, onDeleteSurvey }) {
   const [chosen, setChosen] = useState('')
   const measuring = busy === 'room'
   const rooms = result?.rooms || []
@@ -66,7 +69,11 @@ export default function RoomsTab({ result, busy, samples, onSamplesChange, voice
             Speak the result
           </label>
         </form>
-        {measuring && <Progress seconds={samples} />}
+        {measuring && <Progress seconds={samples} room={chosen} onStop={onStop} />}
+        <p className="muted small">
+          If the signal changes a lot during the count (you walked into another room), nothing is saved and it
+          asks you to measure again – so every room's number really comes from that room.
+        </p>
       </section>
 
       <section className="card" aria-labelledby="room-results-title">

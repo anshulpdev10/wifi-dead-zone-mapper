@@ -133,6 +133,7 @@ input[type='number'] { width: 100px; }
 .meter-bar div, .progress div { transition: width 0.4s; }
 .progress { height: auto; flex-direction: column; background: none; }
 .progress div { height: 8px; background: var(--primary); border-radius: 999px; }
+.progress .small-button { align-self: flex-start; margin-top: 6px; padding: 4px 12px; }
 
 /* ---------------------------------------------------------------- stats */
 .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 10px 0; }
