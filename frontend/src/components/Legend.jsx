@@ -13,6 +13,8 @@ export default function Legend() {
       <li><span className="swatch hatched" /> Not measured yet</li>
       <li><span className="swatch dashed" /> Dead-zone outline (&lt; −75)</li>
       <li><span className="symbol" style={{ color: '#2563eb' }}>▲</span> Router</li>
+      <li><span className="symbol" style={{ color: '#2563eb' }}>△</span> router? (estimated from readings)</li>
+      <li><span className="swatch tiny-dot" /> Tracked reading</li>
       <li><span className="symbol" style={{ color: '#7c3aed' }}>★</span> Suggested extender</li>
       <li><span className="swatch ring" /> Obstructed (8+ dB below model)</li>
     </ul>

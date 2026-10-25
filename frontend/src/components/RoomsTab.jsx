@@ -80,6 +80,12 @@ export default function RoomsTab({ result, busy, samples, onSamplesChange, voice
               <span>{ext.reason}</span>
               {result.extender_room && <span>Best place for it: <strong>{result.extender_room}</strong></span>}
             </div>
+            {result.router_room && (
+              <p className="small router-line">
+                ▲ Your router is probably in <strong>{result.router_room}</strong> (or right next to it) – it has
+                the strongest signal.
+              </p>
+            )}
 
             <ol className="room-list">
               {rooms.map((r) => {
@@ -90,6 +96,7 @@ export default function RoomsTab({ result, busy, samples, onSamplesChange, voice
                       <strong>{r.name}</strong>
                       <span className="room-dbm">{r.avg_dbm} dBm</span>
                       <span className="tag" style={{ background: color }}>{STATUS_LABEL[r.status]}</span>
+                      {result.router_room === r.name && <span className="tag router-tag">router?</span>}
                       {result.extender_room === r.name && <span className="tag ext-tag">extender here</span>}
                       <button className="icon" disabled={!!busy} onClick={() => onDeleteRoom(r.name)}
                         aria-label={`Delete all readings of ${r.name}`}>✕</button>

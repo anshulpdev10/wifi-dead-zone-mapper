@@ -17,7 +17,7 @@ import { describePosition } from '../position.js'
 
 const HEATMAP_ALPHA = 0.55   // see-through so the plan image stays visible
 
-export default function FloorMap({ survey, readings, map, showHeatmap, mode, selected, live,
+export default function FloorMap({ survey, readings, map, showHeatmap, mode, selected, live, tracking,
   obstructedIds, lastAddedId, whatIfMode, whatIf, onWhatIf, onSelect, onPick }) {
   const wrapRef = useRef(null)
   const canvasRef = useRef(null)
@@ -140,11 +140,22 @@ export default function FloorMap({ survey, readings, map, showHeatmap, mode, sel
       ctx.setLineDash([])
     }
 
-    // 5. Measured points with their dBm value
+    // 5. Measured points with their dBm value. Track-mode points (one every
+    //    ~2 s along your path) are small dots without labels, so the path stays readable.
     ctx.font = '600 11px system-ui, sans-serif'
     ctx.textAlign = 'center'
     readings.forEach((reading) => {
       const x = px(reading.x), y = px(reading.y)
+      if (reading.mode === 'track') {
+        ctx.beginPath()
+        ctx.arc(x, y, 2.5, 0, Math.PI * 2)
+        ctx.fillStyle = bandFor(reading.rssi_mean).color
+        ctx.fill()
+        ctx.lineWidth = 0.8
+        ctx.strokeStyle = 'rgba(27,31,36,0.7)'
+        ctx.stroke()
+        return
+      }
       ctx.beginPath()
       ctx.arc(x, y, 5, 0, Math.PI * 2)
       ctx.fillStyle = bandFor(reading.rssi_mean).color
@@ -182,6 +193,35 @@ export default function FloorMap({ survey, readings, map, showHeatmap, mode, sel
       ctx.strokeStyle = '#ffffff'
       ctx.stroke()
       ctx.globalAlpha = 1
+    }
+    // Estimated router (worked out from the readings): dashed accuracy circle +
+    // hollow triangle + "router?" - only while no router has been placed.
+    const est = map?.router_estimate
+    if (est && !survey.router && !whatIf) {
+      const x = px(est.x), y = px(est.y)
+      ctx.beginPath()
+      ctx.arc(x, y, Math.max(px(est.accuracy_m), 14), 0, Math.PI * 2)
+      ctx.fillStyle = 'rgba(37,99,235,0.10)'
+      ctx.fill()
+      ctx.setLineDash([5, 4])
+      ctx.lineWidth = 1.5
+      ctx.strokeStyle = '#2563eb'
+      ctx.stroke()
+      ctx.setLineDash([])
+      ctx.beginPath()
+      ctx.moveTo(x, y - 11); ctx.lineTo(x + 10, y + 7); ctx.lineTo(x - 10, y + 7); ctx.closePath()
+      ctx.fillStyle = 'rgba(255,255,255,0.9)'
+      ctx.fill()
+      ctx.lineWidth = 2.5
+      ctx.strokeStyle = '#2563eb'
+      ctx.stroke()
+      ctx.font = '700 11px system-ui, sans-serif'
+      ctx.textAlign = 'center'
+      ctx.lineWidth = 3
+      ctx.strokeStyle = 'rgba(255,255,255,0.9)'
+      ctx.strokeText('router?', x, y + 21)
+      ctx.fillStyle = '#1d4ed8'
+      ctx.fillText('router?', x, y + 21)
     }
     if (survey.router) triangle(survey.router, '#2563eb', whatIf ? 0.35 : 1)
     if (whatIf) triangle(whatIf.router, '#ea580c', 1)
@@ -281,12 +321,21 @@ export default function FloorMap({ survey, readings, map, showHeatmap, mode, sel
   }
 
   function handleClick(event) {
-    if (whatIfMode) return                 // in what-if mode clicks only move the proposed router
+    if (whatIfMode || tracking) return     // what-if: clicks move the proposed router; tracking: pointer = you
     onPick(eventToPoint(event))
   }
 
   // What-if: press and drag anywhere to move the proposed router.
+  // Tracking: "you" follow the mouse (no click needed) or your finger on a phone.
   function handlePointer(event) {
+    if (tracking && !whatIfMode) {
+      if (event.type === 'pointerdown') canvasRef.current.setPointerCapture(event.pointerId)
+      if (event.pointerType === 'mouse' || event.type === 'pointerdown' || event.buttons) {
+        const point = eventToPoint(event)
+        if (!selected || point.x !== selected.x || point.y !== selected.y) onSelect(point)   // redraw only on a real move
+      }
+      return
+    }
     if (!whatIfMode || (event.type === 'pointermove' && event.buttons !== 1)) return
     if (event.type === 'pointerdown') canvasRef.current.setPointerCapture(event.pointerId)
     onWhatIf(eventToPoint(event))
@@ -299,7 +348,7 @@ export default function FloorMap({ survey, readings, map, showHeatmap, mode, sel
     if (moves[event.key]) {
       event.preventDefault()
       onSelect(toPoint(start.x + moves[event.key][0], start.y + moves[event.key][1]))
-    } else if (event.key === 'Enter' && selected) {
+    } else if (event.key === 'Enter' && selected && !tracking) {
       onPick(selected)
     }
   }
@@ -308,7 +357,7 @@ export default function FloorMap({ survey, readings, map, showHeatmap, mode, sel
     <div ref={wrapRef} className="map-wrap">
       <canvas
         ref={canvasRef}
-        className={`floor-canvas mode-${whatIfMode ? 'whatif' : mode}`}
+        className={`floor-canvas mode-${whatIfMode ? 'whatif' : tracking ? 'tracking' : mode}`}
         style={{ width: cssW, height: cssH }}
         tabIndex={0}
         role="img"

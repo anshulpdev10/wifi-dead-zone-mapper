@@ -114,6 +114,7 @@ input[type='number'] { width: 100px; }
 .legend li { display: inline-flex; align-items: center; gap: 6px; }
 .swatch { width: 14px; height: 14px; border-radius: 3px; display: inline-block; }
 .swatch.dashed { border: 2px dashed #7a1d12; }
+.swatch.tiny-dot { width: 6px; height: 6px; border-radius: 50%; background: #8CCB5E; border: 1px solid #1b1f24; margin: 0 4px; }
 .swatch.hatched {
   border: 1px solid #c3cad3;
   background: repeating-linear-gradient(135deg, #eef0f3 0 3px, #b7bfca 3px 4px);
@@ -259,6 +260,7 @@ tr.mine td { background: #eef4ff; font-weight: 600; }
 
 /* ---------------------------------------------------------------- what-if */
 .floor-canvas.mode-whatif { cursor: grab; touch-action: none; }
+.floor-canvas.mode-tracking { cursor: none; touch-action: none; }   /* the crosshair drawn on the map is "you" */
 .compare { margin: 8px 0; }
 .compare td:not(:first-child), .compare th:not(:first-child) { text-align: right; }
 .up { color: #1e7b45; font-weight: 700; }
@@ -285,6 +287,11 @@ button.big { padding: 10px 18px; font-weight: 700; }
 .room-dbm { font-weight: 700; font-variant-numeric: tabular-nums; }
 .room-list li.dead .room-head strong { color: #b42318; }
 .ext-tag { background: #7c3aed; color: #fff; }
+.router-tag { background: #2563eb; color: #fff; }
+.router-line { margin: 8px 0 0; color: #1d4ed8; }
+.file-button { position: relative; }
+.tracking-tag { color: #b42318; }
+.router-card { border-color: #9cc1fb; }
 .room-bar { position: relative; height: 12px; border-radius: 999px; background: #e7ebf0; margin: 4px 0 2px; overflow: hidden; }
 .room-bar div { height: 100%; border-radius: 999px; transition: width 0.4s; }
 .room-bar .mark { position: absolute; top: 0; bottom: 0; width: 2px; background: rgba(27, 31, 36, 0.45); }

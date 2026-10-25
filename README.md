@@ -100,30 +100,36 @@ debug mode is switched off then, so its debugger is never reachable from other d
 
 ### A. Room by room (Rooms tab, the quickest answer)
 
-1. **New survey** → give it a name (e.g. *My college*). Nothing else is needed.
+1. **New survey** starts one straight away (no form: places are named with the room buttons).
 2. Go to a room, hold the laptop where you normally use it (desk, bench, bed), pick the
    room (**College**: Classroom, Lab, Library…, **Home**: Bedroom, Kitchen…, **Office**,
    or type your own, e.g. *Lab 3*) and press **Measure**. It averages 5–30 s of samples
    and speaks the result.
 3. Measure the same room again to add another spot; the room shows its average, best and worst.
 4. **Results:** every room ranked with a colour bar (marks at −67 and −75 dBm), the verdict
-   (*★ Extender required* / *✓ No extender needed*), the **best room for the extender**, and tips.
+   (*★ Extender required* / *✓ No extender needed*), the **best room for the extender**,
+   **which room the router is probably in** (the strongest one), and tips.
 
 ### B. Survey around me (Floor map tab, a heatmap around you)
 
 1. **Survey around me** → pick where you are (Classroom, Lab, …) and a **range**: 5, 10, 15,
    20, 30 or 50 m. You get a square map of that size with **you in the centre**, and
    the first reading is taken right there.
-2. Walk, stop, and **tap where you are now** on the map (roughly is fine). It measures
-   there for the chosen time, and the heatmap, dead zones and readings grow around you.
-   Grey hatching = not measured yet.
-3. Optional: **Place router** (tap where it is) for the path-loss calibration and the what-if.
+2. Press **▶ Start tracking** and walk, keeping the pointer on where you are: the mouse
+   over the map, or your finger on the phone dashboard (`npm run dev:lan`). No clicking:
+   a reading is saved **every 2 s** at that spot, and the heatmap, dead zones and readings
+   grow along your path. Grey hatching = not measured yet.
+3. **Where is my router?** After 4+ readings in different places the app works it out and
+   marks **router?** on the map with an accuracy circle. Press *Yes, it's here* to use it
+   (this unlocks calibration and what-if), or place it yourself.
 
-| Mode (Floor map) | A tap on the map… |
+| Mode (Floor map) | What happens |
 |---|---|
-| **Measure** | measures there straight away for the chosen time (3–30 s, 1 sample per second). Untick *Auto-measure* to only set the marker and press **Measure here**. |
-| **Walk** | saves a quick **3-sample** reading at once (~3 s). Tap-tap-tap as you walk. |
-| **Place router** | sets the router position (needed for calibration and what-if). |
+| **Track my walk** | After *Start tracking*, the pointer is you: a reading (the newest live sample) every 2 s at the pointer, one per 6 s while you stand still. |
+| **Tap to measure** | A tap measures there for the chosen time (3–30 s, 1 sample per second), more accurate. Untick *Measure as soon as I tap* to only set the marker and press **Measure here**. |
+| **Place router** | A tap sets the router position. |
+
+**Add floor plan** (map toolbar) puts a photo or drawing of the floor under the heatmap.
 
 **Side panel (Floor map)**
 1. **Live signal:** big dBm number, band, SSID, channel, and a 60-second graph with dashed
@@ -152,6 +158,7 @@ below (#E2513C). Everything below −75 is outlined as a dead zone on the map.
 | Measure / Walk | The endpoint waits for N *new* samples from the sampler and saves their mean, standard deviation, min and max. Averaging smooths out fading (the signal's natural second-to-second wobble). |
 | Heatmap | **IDW**: every 0.25 m cell (coarser on floors over ~37 m, max ~150 cells per side) gets a weighted average of the readings, `value = Σ wᵢ·RSSIᵢ / Σ wᵢ` with `wᵢ = 1/dᵢ²`, so nearer readings count more. Cells farther than `max(3 m, √(area/10))` from every reading are **not measured yet** (grey hatching) instead of guessed, so the first reading does not colour the whole floor. Readings spread over the area (about one every few metres) cover it all. Percentages are of the measured part; *Floor measured* shows how much that is. |
 | Dead zones | Measured cells below −75 dBm are grouped with a **BFS flood fill** (4 neighbours). Groups under 0.5 m² are ignored. Each zone gets its area, centre and worst value. |
+| Router estimate | For every candidate spot on a fine grid, fit `RSSI = A − 10·n·log₁₀(d)` (d = distance from that spot to each reading) by least squares, all candidates at once with numpy, and keep the best fit with a sensible n (1.5–6). The accuracy circle covers every spot that fits almost as well (at least 1 m). Walls bend the signal, so it's labelled an estimate; a spot on the edge means the router is probably just outside the area. |
 | Room-by-room | Readings are grouped by room name. A room's status comes from its average: good ≥ −67, fair −75…−67, dead < −75. An extender is needed when any room is dead; it goes in the **weakest room that still has good signal**, the edge of good coverage and the closest strong spot to the dead rooms. (The app doesn't know how rooms connect, so it also says to pick the side nearest the dead room; if only the router's room is good, it says to measure on the way and use the last spot that's still ≥ −67.) |
 | Extender spot | The cell at −67 dBm or better nearest to the centre of the biggest dead zone: an extender there still gets a strong signal but is as close as possible to the gap. |
 | Calibration | Log-distance model `RSSI = A − 10·n·log₁₀(d)`. With `x = −10·log₁₀(d)` it is a straight line `RSSI = A + n·x`, fitted by **least squares** (numpy). **R² = 1 − SS_res/SS_tot**. A reading 8+ dB below the line is flagged *obstructed* (orange ring). n = 2 in free space and about 3 in homes; higher means more absorption. |
@@ -180,6 +187,7 @@ Newer Windows 11 builds hide Wi-Fi details from `netsh` unless Location is allow
 | POST | `/api/surveys/<id>/measure` | `{x, y, samples}`: average 3–30 fresh samples |
 | POST | `/api/surveys/<id>/walk` | `{x, y}`: quick 3-sample reading |
 | POST | `/api/surveys/<id>/readings` | `{x, y, rssi}`: manual entry |
+| POST | `/api/surveys/<id>/track` | `{x, y}`: newest live sample saved at x, y (track mode) |
 | POST | `/api/surveys/<id>/rooms/measure` | `{room, samples}`: room-by-room reading |
 | GET | `/api/surveys/<id>/rooms` | per-room signal, extender verdict + room, advice |
 | DELETE | `/api/surveys/<id>/rooms/<name>` | delete one room's readings |
