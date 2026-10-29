@@ -37,6 +37,9 @@ const MODES = [
 ]
 const TABS = [['rooms', 'Rooms'], ['map', 'Floor map'], ['networks', 'Networks']]
 const TRACK_EVERY_MS = 2000
+// Map readings older than this are from an earlier session (the dashboard opens on the
+// newest survey): ask before drawing a new walk into that heatmap.
+const SESSION_GAP_MS = 30 * 60 * 1000
 
 export default function App() {
   const [health, setHealth] = useState(null)          // {db: "supabase" | "memory", ...}
@@ -73,6 +76,7 @@ export default function App() {
   const whatIfBusy = useRef(false)                    // one prediction request at a time
   const whatIfNext = useRef(null)                     // latest drag position while busy
   const startAt = useRef(null)                        // "survey around me": {id, point} to measure first
+  const trackAfterLoad = useRef(null)                 // new survey for a walk: {id, point} to start tracking at
   const selectedRef = useRef(null)                    // where "you" are, for the tracking timer
   selectedRef.current = selected
   const trackingRef = useRef(false)
@@ -178,10 +182,38 @@ export default function App() {
       showError(new Error('Motion sensors were not allowed - move your finger on the map instead.'))
       setStepMode(false)
     }
-    if (!selected) setSelected({ x: survey.width / 2, y: survey.height / 2 })
+    const point = selected ?? { x: survey.width / 2, y: survey.height / 2 }
+    try {
+      if (await newSurveyIfOld((id) => { trackAfterLoad.current = { id, point } })) return  // load effect starts it
+    } catch (err) {
+      showError(err)
+      return
+    }
+    setSelected(point)
+    startTracking()
+  }
+
+  function startTracking() {
     startHeading.current = null
     setTrackCount(0); setTrackError(''); setWhatIfMode(false); setWhatIf(null)
     setTracking(true)
+  }
+
+  // Floor map: if this survey's last map reading is from an earlier session, ask
+  // whether to start a new survey (same size, empty map) for this walk instead.
+  // onCreated(id) runs before the new survey loads. Returns true if one was created.
+  async function newSurveyIfOld(onCreated) {
+    const last = Math.max(0, ...mapReadings.map((r) => Date.parse(r.time) || 0))
+    if (!last || Date.now() - last < SESSION_GAP_MS) return false
+    const when = new Date(last).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })
+    if (!window.confirm(`“${survey.name}” already has ${mapReadings.length} map reading(s), the last one from ${when}.\n\n`
+      + 'OK = start a new survey for this walk (empty map)\nCancel = add to this survey')) return false
+    const name = `Survey ${new Date().toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`
+    const created = await api.post('/surveys', { name, width: survey.width, height: survey.height })
+    onCreated(created.id)
+    await refreshSurveys(created.id)
+    showOk(`New survey “${name}” started – the old one is still in the survey list.`)
+    return true
   }
 
   // Whenever the selected survey changes, load everything about it.
@@ -206,6 +238,12 @@ export default function App() {
           startAt.current = null
           setSelected(point)
           measureAt(point)
+        }
+        // A walk that asked for a new survey: start tracking where you were.
+        if (trackAfterLoad.current?.id === surveyId) {
+          setSelected(trackAfterLoad.current.point)
+          trackAfterLoad.current = null
+          startTracking()
         }
       })
       .catch((err) => active && showError(err))
@@ -309,7 +347,18 @@ export default function App() {
       return
     }
     setSelected(point)
-    if (autoMeasure) measureAt(point)
+    if (autoMeasure) measureOnMap(point)
+  }
+
+  // Tap to measure, with the same "earlier session?" check as tracking.
+  async function measureOnMap(point) {
+    try {
+      if (await newSurveyIfOld((id) => { startAt.current = { id, point } })) return  // load effect measures there
+    } catch (err) {
+      showError(err)
+      return
+    }
+    measureAt(point)
   }
 
   // Shared by every kind of measurement: run the request, show + speak the result, refresh.
@@ -533,7 +582,7 @@ export default function App() {
           <MeasurePanel mode={mode} selected={selected} measuring={!!busy}
             samples={samples} onSamplesChange={setSamples}
             autoMeasure={autoMeasure} onAutoChange={setAutoMeasure}
-            onMeasure={() => measureAt(selected)} onManual={handleManual} onStop={() => stopMeasuring()}
+            onMeasure={() => measureOnMap(selected)} onManual={handleManual} onStop={() => stopMeasuring()}
             tracking={tracking} trackCount={trackCount} trackError={trackError} onTrackToggle={toggleTracking}
             stepMode={stepMode} onStepModeChange={setStepMode} stepStatus={steps.status} stepCount={steps.steps}
             facing={facing} onFacingChange={setFacing} stepLength={stepLength} onStepLengthChange={setStepLength} />
