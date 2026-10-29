@@ -31,3 +31,6 @@ build/
 Thumbs.db
 *.log
 SURVEY_DETAILS.pdf
+
+# Project report for the teacher (kept local)
+PROJECT_REPORT.pdf
